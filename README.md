@@ -3,10 +3,12 @@
 Telegram reputation tracking bot — 45,000+ legacy vouches, persistent SQLite database, full admin panel.
 
 ## Features
-- Explicit vouching (`+vouch`, `-vouch`, `+1`, etc.)
-- Optional sentiment-based auto-detection (togglable via admin panel)
+- Explicit vouching (`+vouch`, `-vouch`, `vouch+`, `+ vouch`, bare `vouch` in a reply, `+1`, etc.)
+- **Auto-polarity correction**: `+vouch he scammed me` auto-flips to `-1` if comment has 2+ negative keywords
+- Optional sentiment-based auto-detection (togglable via admin panel, off by default on restart)
 - Legacy vouch import (2020–2023)
 - Full admin panel via `/panel` in DMs
+- **Admin vouch flip**: change any vouch from positive to negative (or vice versa) during review
 - Editable user-facing messages (no code changes needed)
 - GateKeeper Bot cross-reference on `/check`
 
@@ -63,11 +65,27 @@ sudo systemctl restart repbot
 
 ## Admin Panel Features (`/panel` in DMs)
 
-- **📋 Vouch Queue** — Review pending vouches with approve/reject/delete
-- **✏️ Edit Messages** — Change any user-facing message without touching code
-- **⚙️ Settings** — Toggle sentiment vouching on/off (persistent)
-- **👥 User Tools** — View flagged users list
+- **📋 Vouch Queue** — One vouch at a time: approve / reject / delete / 🔄 **Flip ±** polarity with live score adjustment
+- **✏️ Edit Messages** — Change any user-facing message without touching code; reply with new text to save
+- **⚙️ Settings** — Toggle sentiment vouching on/off (persistent across restarts)
+- **👥 User Tools** — Flagged users list with quick command reference
 - **📊 DB Stats** — Live database statistics
+- **📣 Broadcast** — Send message to all known users
+
+## Vouch Trigger Variants
+
+All of the following are accepted:
+
+| Input | Direction |
+|---|---|
+| `+vouch Great trader` | ✅ Positive |
+| `-vouch Scammed me` | ❌ Negative |
+| `+ vouch` / `- vouch` | Spaced operators ✅/❌ |
+| `vouch+` / `vouch-` | Suffix style ✅/❌ |
+| `+rep` / `-rep` / `+1` / `-1` | Shorthand ✅/❌ |
+| `vouch` (bare, in a reply) | ✅ Positive |
+| `/vouch @user comment` | ✅ Positive (command) |
+| `+vouch scammed ripped off` | ❌ Auto-flipped by content |
 
 ## File Structure
 

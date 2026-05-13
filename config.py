@@ -46,6 +46,9 @@ SCAMMER_STRIKE_WINDOW = timedelta(hours=24)
 SENTIMENT_MIN_SCORE = 2
 SENTIMENT_MIN_WORDS = 3
 
+# If a +vouch comment contains ≥ this many unique negative keywords, flip it to -1
+NEGATIVE_CONTENT_OVERRIDE_SCORE = 2
+
 # ─── Admin Panel ──────────────────────────────────────────────────────────────
 PANEL_PAGE_SIZE = 5
 
@@ -118,7 +121,11 @@ VOUCH_TRIGGER_RE = re.compile(
 
 # All trigger words that should be stripped from vouch comments
 VOUCH_TRIGGER_WORDS = [
+    # Standard
     '+vouch', '-vouch', 'vouch+', 'vouch-',
-    '+rep', '-rep', 'rep+', 'rep-',
+    '+rep',   '-rep',   'rep+',   'rep-',
     '/vouch', '+1', '-1', '1+', '1-',
+    # Spaced variants (e.g. "+ vouch", "- rep")
+    '+ vouch', '- vouch', '+ rep', '- rep',
+    '+ 1', '- 1',
 ]

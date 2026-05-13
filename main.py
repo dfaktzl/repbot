@@ -141,8 +141,15 @@ def main():
     app.add_handler(CallbackQueryHandler(check_legacy_page_callback,  pattern=r"^chkl_"))
     app.add_handler(CallbackQueryHandler(check_page_callback,         pattern=r"^chk_"))
 
-    # ── Vouch triggers ──
-    vouch_regex = r"^(?:(?:\+|-)(?:vouch|rep|1\b)|(?:vouch|rep)(?:\+|-)|1(?:\+|-))"
+    # ── Vouch triggers: explicit +/-vouch/rep/1, spaced variants, and bare 'vouch'/'rep' in replies ──
+    vouch_regex = (
+        r"^(?:"
+        r"(?:[+\-]\s*)(?:vouch|rep|1)\b"  # +vouch, -vouch, + vouch, - rep, +1 etc.
+        r"|(?:vouch|rep)(?:\s*[+\-])"       # vouch+, rep-, vouch -, rep +
+        r"|1(?:[+\-])"                       # 1+, 1-
+        r"|vouch\b"                          # bare 'vouch' (in a reply → defaults to +1)
+        r")"
+    )
     app.add_handler(MessageHandler(filters.Regex(vouch_regex) & (~filters.COMMAND), handle_vouch))
 
     # ── Sentiment detection (groups only — not DMs) ──

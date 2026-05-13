@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 from config import (
     LOG_CHANNEL,
     NEG_PATTERN,
+    NEGATIVE_CONTENT_OVERRIDE_SCORE,
     POS_PATTERN,
     SENTIMENT_MIN_SCORE,
     SENTIMENT_MIN_WORDS,
@@ -99,22 +100,30 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     # ── 2. Determine value ────────────────────────────────────────────────────
-    lower_msg = message_text.lower()
-    first_word = lower_msg.split()[0] if lower_msg.split() else ""
-    value = -1 if first_word in ("-vouch", "-rep", "-1", "vouch-", "rep-", "1-") else 1
+    import re as _re
+    # Normalise spaced operators: "+ vouch" → "+vouch", "- rep" → "-rep"
+    normalised = _re.sub(r'^([+\-])\s+(vouch|rep|1)\b', r'\1\2', message_text.strip().lower())
+    first_token = normalised.split()[0] if normalised.split() else ""
+    NEGATIVE_TRIGGERS = {"-vouch", "-rep", "-1", "vouch-", "rep-", "1-"}
+    value = -1 if first_token in NEGATIVE_TRIGGERS else 1
 
     # ── 3. Build comment text ─────────────────────────────────────────────────
     comment_text = direct_comment or message_text
-    # Strip trigger words from BEGINNING only (not from middle of comment)
     comment_text = strip_trigger_words(comment_text)
-    # Also strip the target identifier if it was inline
     if not update.message.reply_to_message and recipient_tg:
-        # Remove @username or ID from the start of comment
         comment_text = comment_text.strip()
         if comment_text.startswith("@"):
             comment_text = " ".join(comment_text.split()[1:])
         elif comment_text.split() and comment_text.split()[0].isdigit():
             comment_text = " ".join(comment_text.split()[1:])
+
+    # ── 3b. Content-override: +vouch with clearly negative comment → flip to -1 ──
+    content_overridden = False
+    if value == 1 and comment_text and comment_text.strip():
+        unique_neg_hits = len(set(m.lower() for m in NEG_PATTERN.findall(comment_text)))
+        if unique_neg_hits >= NEGATIVE_CONTENT_OVERRIDE_SCORE:
+            value = -1
+            content_overridden = True
 
     # ── 4. Content moderation ─────────────────────────────────────────────────
     session = SessionLocal()
@@ -156,6 +165,13 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         comment_display = safe_md(comment_text[:120]) if comment_text else "(none)"
 
+        override_note = ""
+        if content_overridden:
+            override_note = (
+                "\n\n⚠️ *Auto-corrected to NEGATIVE* — your comment contained strong negative keywords.\n"
+                "_If this is wrong, contact an admin to flip it._"
+            )
+
         reply_msg = fix_surrogates(
             get_bot_message(
                 "msg_vouch_success",
@@ -171,7 +187,7 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 new_total=recipient_db.vouches,
                 timestamp=ts_now,
                 divider="\u2500" * 24,
-            )
+            ) + override_note
         )
         await update.message.reply_text(reply_msg, parse_mode="Markdown")
 
