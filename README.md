@@ -12,40 +12,72 @@ Telegram reputation tracking bot — 45,000+ legacy vouches, persistent SQLite d
 - Editable user-facing messages (no code changes needed)
 - GateKeeper Bot cross-reference on `/check`
 
-## Quick Start
+## Before You Deploy — What You Need
 
-```bash
-cp .env.example .env       # fill in BOT_TOKEN, ADMIN_IDS, LOG_CHANNEL
-pip install -r requirements.txt
-python main.py
-```
+Fill these in (you should already have them):
 
-## Environment Variables
+| Value | Where to get it |
+|---|---|
+| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) on Telegram |
+| `ADMIN_IDS` | Your Telegram user ID — message [@userinfobot](https://t.me/userinfobot) |
+| `LOG_CHANNEL` | Your log channel username e.g. `@VouchLoggerAU` |
+
+## Environment Variables (full list)
 
 | Variable | Required | Description |
 |---|---|---|
-| `BOT_TOKEN` | ✅ | Telegram bot token |
+| `BOT_TOKEN` | ✅ | Telegram bot token from BotFather |
 | `ADMIN_IDS` | ✅ | Comma-separated Telegram user IDs |
-| `LOG_CHANNEL` | ✅ | Log channel username or ID |
-| `GATEKEEPER_DB_PATH` | ❌ | Absolute path to gatekeeper.db for cross-reference |
+| `LOG_CHANNEL` | ✅ | Log channel `@username` or numeric ID |
+| `GATEKEEPER_DB_PATH` | ❌ | Absolute path to `gatekeeper.db` on the server |
 
-## Deploy on OCI (Ubuntu)
+## Deploy on OCI — Step by Step
+
+> All commands below run **on your server** (SSH in first: `ssh ubuntu@152.69.160.198`)
+
+### Step 1 — Run the one-time setup script (on server)
 
 ```bash
-git clone https://github.com/dfaktzl/repbot.git
-cd repbot
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp /path/to/your.env .env
-sudo cp repbot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now repbot
+# SSH into your server first, then:
+curl -sO https://raw.githubusercontent.com/dfaktzl/repbot/main/deploy.sh
+sudo bash deploy.sh
 ```
 
-### Update from OCI
+This script will:
+- Install Python, git, sqlite3
+- Clone the repo to `/home/botuser/repbot`
+- Set up a Python venv and install dependencies
+- Create `/home/botuser/repbot/.env` from the template
+- Install and enable the systemd service
+
+### Step 2 — Fill in your credentials (on server)
+
 ```bash
-cd /path/to/repbot
-git pull
+sudo nano /home/botuser/repbot/.env
+```
+
+Edit the file to look like this (replace with your real values):
+
+```env
+BOT_TOKEN=1234567890:ABCdef...
+ADMIN_IDS=18281413977,7626116497
+LOG_CHANNEL=@VouchLoggerAU
+```
+
+Save: `Ctrl+O` → Enter → `Ctrl+X`
+
+### Step 3 — Start the bot (on server)
+
+```bash
+sudo systemctl start repbot
+sudo journalctl -u repbot -f   # watch live logs
+```
+
+### Future Updates (on server — 2 commands)
+
+```bash
+cd /home/botuser/repbot
+sudo -u botuser git pull
 sudo systemctl restart repbot
 ```
 
