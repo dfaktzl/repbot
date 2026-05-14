@@ -16,11 +16,12 @@ Telegram reputation tracking bot — 45,000+ legacy vouches, persistent SQLite d
 
 Fill these in (you should already have them):
 
-| Value | Where to get it |
-|---|---|
-| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) on Telegram |
-| `ADMIN_IDS` | Your Telegram user ID — message [@userinfobot](https://t.me/userinfobot) |
-| `LOG_CHANNEL` | Your log channel username e.g. `@VouchLoggerAU` |
+| Value | Where to get it | Status |
+|---|---|---|
+| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) on Telegram | ⚠️ You need your new token |
+| `ADMIN_IDS` | Your Telegram user ID — message [@userinfobot](https://t.me/userinfobot) | ✅ Pre-filled in `.env.example` |
+| `LOG_CHANNEL` | Numeric channel ID | ✅ Pre-filled (`-1003817851175`) |
+| `GATEKEEPER_DB_PATH` | Path on server | ✅ Pre-filled (`/home/ubuntu/gatekeeper/gatekeeper.db`) |
 
 ## Environment Variables (full list)
 
@@ -50,18 +51,20 @@ This script will:
 - Create `/home/botuser/repbot/.env` from the template
 - Install and enable the systemd service
 
-### Step 2 — Fill in your credentials (on server)
+### Step 2 — Add your BOT_TOKEN (on server)
+
+The `.env.example` is already pre-filled with your `LOG_CHANNEL`, `ADMIN_IDS`, and `GATEKEEPER_DB_PATH`.
+**The only value you need to paste is your new `BOT_TOKEN`.**
+
 
 ```bash
 sudo nano /home/botuser/repbot/.env
 ```
 
-Edit the file to look like this (replace with your real values):
+Find the `BOT_TOKEN` line and replace it:
 
 ```env
-BOT_TOKEN=1234567890:ABCdef...
-ADMIN_IDS=18281413977,7626116497
-LOG_CHANNEL=@VouchLoggerAU
+BOT_TOKEN=YOUR_NEW_BOT_TOKEN_FROM_BOTFATHER
 ```
 
 Save: `Ctrl+O` → Enter → `Ctrl+X`
