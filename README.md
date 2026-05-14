@@ -1,8 +1,11 @@
-# Vouch Bot v3.2
+# Vouch Bot v3.2 — Reputation Tracker
 
 Telegram reputation tracking bot — 45,000+ legacy vouches, persistent SQLite database, full admin panel.
 
+**Bot ID (token prefix):** `8581140481` — uniquely identifies this Vouch/Rep bot from the Gatekeeper bot (`8502950869`).
+
 ## Features
+
 - Explicit vouching (`+vouch`, `-vouch`, `vouch+`, `+ vouch`, bare `vouch` in a reply, `+1`, etc.)
 - **Auto-polarity correction**: `+vouch he scammed me` auto-flips to `-1` if comment has 2+ negative keywords
 - Optional sentiment-based auto-detection (togglable via admin panel, off by default on restart)
@@ -12,13 +15,20 @@ Telegram reputation tracking bot — 45,000+ legacy vouches, persistent SQLite d
 - Editable user-facing messages (no code changes needed)
 - GateKeeper Bot cross-reference on `/check`
 
-## Before You Deploy — What You Need
+## Bot Tokens (Separation of Concerns)
 
-Fill these in (you should already have them):
+| Bot | Token Prefix | Purpose |
+|-----|-------------|---------|
+| **Vouch/Rep Bot** | `8581140481:AAE_...` | Reputation tracking, vouch history, admin panel |
+| **Gatekeeper** | `8502950869:AAGb...` | Access control, join requests, White Channel management |
+
+Each bot runs as a separate systemd service (`repbot.service` vs `gatekeeper.service`) on the same OCI instance.
+
+## Before You Deploy — What You Need
 
 | Value | Where to get it | Status |
 |---|---|---|
-| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) on Telegram | ⚠️ You need your new token |
+| `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) on Telegram | ✅ Pre-filled in `.env.example` (token prefix `8581140481`) |
 | `ADMIN_IDS` | Your Telegram user ID — message [@userinfobot](https://t.me/userinfobot) | ✅ Pre-filled in `.env.example` |
 | `LOG_CHANNEL` | Numeric channel ID | ✅ Pre-filled (`-1003817851175`) |
 | `GATEKEEPER_DB_PATH` | Path on server | ✅ Pre-filled (`/home/ubuntu/gatekeeper/gatekeeper.db`) |
@@ -27,35 +37,54 @@ Fill these in (you should already have them):
 
 | Variable | Required | Description |
 |---|---|---|
-| `BOT_TOKEN` | ✅ | Telegram bot token from BotFather |
+| `BOT_TOKEN` | ✅ | Vouch bot token (prefix `8581140481`) |
 | `ADMIN_IDS` | ✅ | Comma-separated Telegram user IDs |
 | `LOG_CHANNEL` | ✅ | Log channel `@username` or numeric ID |
-| `GATEKEEPER_DB_PATH` | ❌ | Absolute path to `gatekeeper.db` on the server |
+| `GATEKEEPER_DB_PATH` | ❌ | Absolute path to `gatekeeper.db` (for `/check` cross-reference) |
 
-## Deploy on OCI — Step by Step
+---
 
-> All commands below run **on your server** (SSH in first: `ssh ubuntu@152.69.160.198`)
+## 🚀 Deploy on OCI — Full Step-by-Step
 
-### Step 1 — Run the one-time setup script (on server)
+### Prerequisites (Windows)
+
+Your SSH key is at: `C:\Users\defak\Downloads\botcurrentpriv.key`
+
+---
+
+### Step 1 — SSH into the Server (from Windows PowerShell)
+
+```powershell
+# Fix key permissions first (only needed once)
+icacls "C:\Users\defak\Downloads\botcurrentpriv.key" /inheritance:r /grant:r "$($env:USERNAME):(R)"
+
+# Connect to your OCI instance
+ssh -i "C:\Users\defak\Downloads\botcurrentpriv.key" ubuntu@<YOUR_OCI_PUBLIC_IP>
+```
+
+---
+
+### Step 2 — Run the One-Time Setup Script (on server)
 
 ```bash
-# SSH into your server first, then:
 curl -sO https://raw.githubusercontent.com/dfaktzl/repbot/main/deploy.sh
 sudo bash deploy.sh
 ```
 
 This script will:
 - Install Python, git, sqlite3
+- Create a `botuser` system account
 - Clone the repo to `/home/botuser/repbot`
 - Set up a Python venv and install dependencies
-- Create `/home/botuser/repbot/.env` from the template
-- Install and enable the systemd service
+- Copy `.env.example` → `.env` (pre-filled with all values except `BOT_TOKEN`)
+- Install and enable the `repbot` systemd service
 
-### Step 2 — Add your BOT_TOKEN (on server)
+---
 
-The `.env.example` is already pre-filled with your `LOG_CHANNEL`, `ADMIN_IDS`, and `GATEKEEPER_DB_PATH`.
-**The only value you need to paste is your new `BOT_TOKEN`.**
+### Step 3 — Add your BOT_TOKEN (on server)
 
+The `.env.example` is pre-filled with `LOG_CHANNEL`, `ADMIN_IDS`, and `GATEKEEPER_DB_PATH`.
+**The only value you need to paste is your `BOT_TOKEN`.**
 
 ```bash
 sudo nano /home/botuser/repbot/.env
@@ -64,25 +93,40 @@ sudo nano /home/botuser/repbot/.env
 Find the `BOT_TOKEN` line and replace it:
 
 ```env
-BOT_TOKEN=YOUR_NEW_BOT_TOKEN_FROM_BOTFATHER
+BOT_TOKEN=8581140481:AAE_gCNuLulkGdb0eDcjOVQ1DW9Ewy3GQ9g
 ```
 
 Save: `Ctrl+O` → Enter → `Ctrl+X`
 
-### Step 3 — Start the bot (on server)
+---
+
+### Step 4 — Start the Bot (on server)
 
 ```bash
 sudo systemctl start repbot
 sudo journalctl -u repbot -f   # watch live logs
 ```
 
-### Future Updates (on server — 2 commands)
+---
+
+### Step 5 — Verify Both Bots Are Running
+
+```bash
+sudo systemctl status repbot       # Vouch/Rep bot (token: 8581140481)
+sudo systemctl status gatekeeper   # Gatekeeper bot (token: 8502950869)
+```
+
+---
+
+### Future Updates (2 commands)
 
 ```bash
 cd /home/botuser/repbot
 sudo -u botuser git pull
 sudo systemctl restart repbot
 ```
+
+---
 
 ## Admin Commands
 
@@ -140,3 +184,12 @@ vouch_checker/
 ├── backup_db.sh         # Cron-friendly DB backup script
 └── deploy.sh            # Server setup helper
 ```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Permission denied (publickey)` | Fix key permissions: `icacls "C:\Users\defak\Downloads\botcurrentpriv.key" /inheritance:r /grant:r "$($env:USERNAME):(R)"` |
+| Bot not responding | `sudo journalctl -u repbot -f` to see errors |
+| DB locked error | Check only one instance is running: `ps aux | grep python` |
+| Wrong bot running | Check token prefix: `8581140481` = Vouch bot, `8502950869` = Gatekeeper |
