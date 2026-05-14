@@ -73,8 +73,7 @@ sudo bash deploy.sh
 
 This script will:
 - Install Python, git, sqlite3
-- Create a `botuser` system account
-- Clone the repo to `/home/botuser/repbot`
+- Clone the repo to `/home/ubuntu/repbot`
 - Set up a Python venv and install dependencies
 - Copy `.env.example` → `.env` (pre-filled with all values except `BOT_TOKEN`)
 - Install and enable the `repbot` systemd service
@@ -87,7 +86,7 @@ The `.env.example` is pre-filled with `LOG_CHANNEL`, `ADMIN_IDS`, and `GATEKEEPE
 **The only value you need to paste is your `BOT_TOKEN`.**
 
 ```bash
-sudo nano /home/botuser/repbot/.env
+sudo nano /home/ubuntu/repbot/.env
 ```
 
 Find the `BOT_TOKEN` line and replace it:
@@ -121,8 +120,8 @@ sudo systemctl status gatekeeper   # Gatekeeper bot (token: 8502950869)
 ### Future Updates (2 commands)
 
 ```bash
-cd /home/botuser/repbot
-sudo -u botuser git pull
+cd /home/ubuntu/repbot
+sudo -u ubuntu git pull
 sudo systemctl restart repbot
 ```
 

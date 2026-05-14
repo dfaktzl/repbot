@@ -1,12 +1,12 @@
 #!/bin/bash
 # deploy.sh — First-time setup for a fresh OCI Ubuntu 22.04 instance
 # Run as: sudo bash deploy.sh
-# After running, edit /home/botuser/repbot/.env then: sudo systemctl start repbot
+# After running, edit /home/ubuntu/repbot/.env then: sudo systemctl start repbot
 
 set -e
 
 REPO_URL="https://github.com/dfaktzl/repbot.git"
-BOT_DIR="/home/botuser/repbot"
+BOT_DIR="/home/ubuntu/repbot"
 SERVICE_NAME="repbot"
 
 echo "═══════════════════════════════════════════════"
@@ -31,24 +31,19 @@ echo "📦 Updating system packages..."
 apt-get update -y
 apt-get install -y python3 python3-pip python3-venv git sqlite3
 
-# ── Bot user ──────────────────────────────────────────────────────────────────
-if ! id "botuser" &>/dev/null; then
-    echo "👤 Creating botuser..."
-    useradd -m -s /bin/bash botuser
-fi
-
 # ── Clone / update repo ───────────────────────────────────────────────────────
 if [ -d "$BOT_DIR/.git" ]; then
     echo "🔄 Repo already exists — pulling latest..."
-    sudo -u botuser git -C "$BOT_DIR" pull
+    git -C "$BOT_DIR" pull
 else
     echo "📥 Cloning repo..."
-    sudo -u botuser git clone "$REPO_URL" "$BOT_DIR"
+    git clone "$REPO_URL" "$BOT_DIR"
+    chown -R ubuntu:ubuntu "$BOT_DIR"
 fi
 
 # ── Python venv + deps ────────────────────────────────────────────────────────
 echo "🐍 Installing Python dependencies..."
-sudo -u botuser bash -c "
+sudo -u ubuntu bash -c "
     cd $BOT_DIR
     python3 -m venv venv
     source venv/bin/activate
@@ -61,7 +56,7 @@ if [ ! -f "$BOT_DIR/.env" ]; then
     echo ""
     echo "⚠️  Creating .env from template..."
     cp "$BOT_DIR/.env.example" "$BOT_DIR/.env"
-    chown botuser:botuser "$BOT_DIR/.env"
+    chown ubuntu:ubuntu "$BOT_DIR/.env"
     chmod 600 "$BOT_DIR/.env"
     echo ""
     echo "  ┌─────────────────────────────────────────────────┐"
@@ -73,8 +68,11 @@ fi
 # ── Systemd service ───────────────────────────────────────────────────────────
 echo "⚙️  Installing systemd service..."
 # Patch service file to use correct directory
-sed "s|/home/botuser/bot|$BOT_DIR|g" "$BOT_DIR/repbot.service" \
+sed "s|/home/botuser/repbot|$BOT_DIR|g" "$BOT_DIR/repbot.service" | \
+sed "s|User=botuser|User=ubuntu|g" | \
+sed "s|Group=botuser|Group=ubuntu|g" \
     > /etc/systemd/system/${SERVICE_NAME}.service
+
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 
@@ -88,6 +86,6 @@ echo "  2. Start the bot:        sudo systemctl start $SERVICE_NAME"
 echo "  3. Watch live logs:      sudo journalctl -u $SERVICE_NAME -f"
 echo ""
 echo "  FUTURE UPDATES (just these two commands):"
-echo "  cd $BOT_DIR && sudo -u botuser git pull"
+echo "  cd $BOT_DIR && sudo -u ubuntu git pull"
 echo "  sudo systemctl restart $SERVICE_NAME"
 echo "═══════════════════════════════════════════════"
