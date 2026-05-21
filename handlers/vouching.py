@@ -317,10 +317,11 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
         icon = "✅" if value > 0 else "❌"
         action = "increased" if value > 0 else "decreased"
 
+        divider = "\u2500" * 24
         footer = fix_surrogates(get_bot_message("msg_sentiment_footer"))
         reply_msg = fix_surrogates(
             f"\U0001f9e0 **Auto-Detected Vouch**\n"
-            f"{'\u2500' * 24}\n"
+            f"{divider}\n"
             f"{icon} {safe_md(voucher_user.first_name)} \u2192 {safe_md(recipient_tg.first_name)} "
             f"(`{value:+d}`) | New total: `{recipient_db.vouches}`\n"
             f"\u23f3 Pending manual review\n"
