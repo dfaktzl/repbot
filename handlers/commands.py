@@ -58,7 +58,7 @@ def _check_gatekeeper(user_id: int) -> str | None:
         conn = sqlite3.connect(GATEKEEPER_DB_PATH, timeout=3)
         cur = conn.cursor()
         cur.execute(
-            "SELECT is_verified, status FROM users WHERE user_id = ?", (user_id,)
+            "SELECT is_verified, status FROM users WHERE id = ?", (user_id,)
         )
         row = cur.fetchone()
         conn.close()

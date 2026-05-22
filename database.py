@@ -33,7 +33,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
 
-    id = Column("user_id", BigInteger, primary_key=True)       # Telegram User ID (static)
+    id = Column(BigInteger, primary_key=True)       # Telegram User ID (static)
     username = Column(String, nullable=True)          # @username (can change)
     first_name = Column(String, nullable=True)
     last_name = Column(String, nullable=True)
@@ -69,8 +69,8 @@ class Vouch(Base):
     __tablename__ = "vouches"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    voucher_id = Column(BigInteger, ForeignKey("users.user_id"))
-    recipient_id = Column(BigInteger, ForeignKey("users.user_id"))
+    voucher_id = Column(BigInteger, ForeignKey("users.id"))
+    recipient_id = Column(BigInteger, ForeignKey("users.id"))
     value = Column(Integer, default=1)                # +1 or -1
     message_content = Column(String, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -100,7 +100,7 @@ class LongMessage(Base):
     __tablename__ = "long_messages"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.user_id"))
+    user_id = Column(BigInteger, ForeignKey("users.id"))
     chat_id = Column(BigInteger, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     length = Column(Integer)
@@ -115,7 +115,7 @@ class SexWorkerTrigger(Base):
     __tablename__ = "sex_worker_triggers"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.user_id"))
+    user_id = Column(BigInteger, ForeignKey("users.id"))
     chat_id = Column(BigInteger, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     trigger_word = Column(String)
@@ -130,7 +130,7 @@ class PolicyViolation(Base):
     __tablename__ = "policy_violations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.user_id"))
+    user_id = Column(BigInteger, ForeignKey("users.id"))
     chat_id = Column(BigInteger, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     term = Column(String, nullable=True)  # The blacklisted term that was matched
