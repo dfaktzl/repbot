@@ -106,6 +106,8 @@ def main():
         cmd_scammer,
         cmd_unflag,
         panel_callback,
+        cmd_noweb,
+        cmd_webactive,
     )
     from handlers.admin_panel import (
         admin_input_handler,
@@ -133,6 +135,9 @@ def main():
     app.add_handler(CommandHandler("forcevouch",    cmd_force_vouch))
     app.add_handler(CommandHandler("dangerous",     cmd_dangerous))
     app.add_handler(CommandHandler("broadcast",     cmd_broadcast))
+    app.add_handler(CommandHandler("noweb",         cmd_noweb))
+    app.add_handler(CommandHandler("weboff",        cmd_noweb))
+    app.add_handler(CommandHandler("webactive",     cmd_webactive))
 
     # ── Inline callbacks ──
     app.add_handler(CallbackQueryHandler(panel_nav_callback,          pattern=r"^ap_"))
