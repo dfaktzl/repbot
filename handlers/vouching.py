@@ -197,6 +197,63 @@ def unflag_user_db_sync(target_user_id: int) -> str:
         session.close()
 
 
+def approve_vouch_db_sync(vouch_id: int) -> str:
+    """Approves a vouch (sets verified = 1)."""
+    session = SessionLocal()
+    try:
+        vouch = session.query(Vouch).filter(Vouch.id == vouch_id).first()
+        if not vouch:
+            return "Vouch not found"
+        vouch.verified = 1
+        session.commit()
+        return ""
+    except Exception as e:
+        session.rollback()
+        logger.error(f"approve_vouch_db_sync error: {e}", exc_info=True)
+        return str(e)
+    finally:
+        session.close()
+
+
+def rebuild_log_keyboard(vouch_id: int, recipient_id: int, include_verify: bool = True) -> InlineKeyboardMarkup:
+    row1 = []
+    if include_verify:
+        row1.append(InlineKeyboardButton("✅ Verify Vouch", callback_data=f"admin_approve_vouch_{vouch_id}"))
+    row1.extend([
+        InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
+        InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
+    ])
+    keyboard = [
+        row1,
+        [
+            InlineKeyboardButton("🚩 Flag User", callback_data=f"admin_flag_user_{recipient_id}"),
+            InlineKeyboardButton("🟢 Unflag User", callback_data=f"admin_unflag_user_{recipient_id}")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def update_log_text(current_text_html: str, status_note: str) -> str:
+    parts = current_text_html.split("──────────────────────────")
+    header = parts[0].strip()
+    body = parts[1].strip() if len(parts) > 1 else ""
+    
+    # Strip existing action statuses if they exist
+    body_lines = body.split("\n")
+    cleaned_body_lines = []
+    for line in body_lines:
+        if any(marker in line for marker in ["Approved by", "Deleted by", "Toggled by", "Flagged by", "Unflagged by"]):
+            break
+        cleaned_body_lines.append(line)
+    
+    body_clean = "\n".join(cleaned_body_lines).strip()
+    while body_clean.endswith("──────────────────────────") or body_clean.endswith("\n"):
+        body_clean = body_clean[:-26].strip() if body_clean.endswith("──────────────────────────") else body_clean[:-1].strip()
+
+    return f"{header}\n──────────────────────────\n{body_clean}\n──────────────────────────\n{status_note}"
+
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  EXPLICIT VOUCH HANDLER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -392,6 +449,7 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             keyboard = [
                 [
+                    InlineKeyboardButton("✅ Verify Vouch", callback_data=f"admin_approve_vouch_{vouch_id}"),
                     InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
                     InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
                 ],
@@ -504,31 +562,30 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
     if error:
         return  # Silent skip for sentiment vouches
 
-    # Shorter, less disruptive response
+    # Shorter, less disruptive response (Silent for normal users - only logged to admins)
     icon = "✅" if value > 0 else "❌"
-    divider = "\u2500" * 24
-    footer_text = fix_surrogates(get_bot_message("msg_sentiment_footer"))
+    # divider = "\u2500" * 24
+    # footer_text = fix_surrogates(get_bot_message("msg_sentiment_footer"))
     
-    # We build the multi-line string explicitly avoiding any backslashes inside curly braces
-    reply_msg = fix_surrogates(
-        (
-            "🧠 <b>Auto-Detected Vouch</b>\n"
-            "{divider}\n"
-            "{icon} {voucher_name} → {recipient_name} ({value:+d}) | New total: <code>{new_total}</code>\n"
-            "⏳ Pending manual review\n"
-            "{footer}"
-        ).format(
-            divider=divider,
-            icon=icon,
-            voucher_name=safe_md(voucher_user.first_name),
-            recipient_name=safe_md(recipient_tg.first_name),
-            value=value,
-            new_total=new_total,
-            footer=footer_text
-        )
-    )
+    # reply_msg = fix_surrogates(
+    #     (
+    #         "🧠 <b>Auto-Detected Vouch</b>\n"
+    #         "{divider}\n"
+    #         "{icon} {voucher_name} → {recipient_name} ({value:+d}) | New total: <code>{new_total}</code>\n"
+    #         "⏳ Pending manual review\n"
+    #         "{footer}"
+    #     ).format(
+    #         divider=divider,
+    #         icon=icon,
+    #         voucher_name=safe_md(voucher_user.first_name),
+    #         recipient_name=safe_md(recipient_tg.first_name),
+    #         value=value,
+    #         new_total=new_total,
+    #         footer=footer_text
+    #     )
+    # )
     
-    await msg.reply_text(reply_msg, parse_mode="HTML")
+    # await msg.reply_text(reply_msg, parse_mode="HTML")
 
     if console:
         v_uname = f"@{voucher_user.username}" if voucher_user.username else f"ID: {voucher_user.id}"
@@ -544,6 +601,7 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
         try:
             keyboard = [
                 [
+                    InlineKeyboardButton("✅ Verify Vouch", callback_data=f"admin_approve_vouch_{vouch_id}"),
                     InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
                     InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
                 ],
@@ -587,8 +645,46 @@ async def admin_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     data = query.data
-    
-    if data.startswith("admin_toggle_vouch_"):
+    admin_name = query.from_user.first_name
+    current_text = query.message.text_html
+
+    # Parse vouch_id if available in message HTML
+    vouch_id = None
+    import re
+    vouch_match = re.search(r"\(ID:\s*<code>(\d+)<\/code>\)", current_text)
+    if vouch_match:
+        vouch_id = int(vouch_match.group(1))
+
+    # Determine target recipient_id
+    recipient_id = None
+    if "flag_user_" in data or "unflag_user_" in data:
+        recipient_id = int(data.split("_")[-1])
+    elif vouch_id:
+        session = SessionLocal()
+        try:
+            v_rec = session.query(Vouch).filter(Vouch.id == vouch_id).first()
+            if v_rec:
+                recipient_id = v_rec.recipient_id
+        finally:
+            session.close()
+
+    if data.startswith("admin_approve_vouch_"):
+        vouch_id = int(data.split("_")[-1])
+        err = await asyncio.to_thread(approve_vouch_db_sync, vouch_id)
+        if err:
+            await query.answer(f"❌ Error: {err}", show_alert=True)
+            return
+        
+        await query.answer(f"✅ Vouch #{vouch_id} approved!", show_alert=True)
+        
+        status_note = f"✅ <b>Approved by {safe_md(admin_name)}</b>"
+        new_text = update_log_text(current_text, status_note)
+        
+        # Remove Verify button but keep Toggle/Delete and flags
+        reply_markup = rebuild_log_keyboard(vouch_id, recipient_id, include_verify=False)
+        await query.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=reply_markup)
+        
+    elif data.startswith("admin_toggle_vouch_"):
         vouch_id = int(data.split("_")[-1])
         new_val, new_total, err = await asyncio.to_thread(toggle_vouch_db_sync, vouch_id)
         if err:
@@ -596,6 +692,12 @@ async def admin_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         
         await query.answer(f"🔄 Vouch #{vouch_id} toggled to {new_val:+d}! Target total: {new_total}", show_alert=True)
+        
+        status_note = f"🔄 <b>Toggled to {new_val:+d} by {safe_md(admin_name)}</b>"
+        new_text = update_log_text(current_text, status_note)
+        
+        reply_markup = rebuild_log_keyboard(vouch_id, recipient_id, include_verify=False)
+        await query.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=reply_markup)
         
     elif data.startswith("admin_delete_vouch_"):
         vouch_id = int(data.split("_")[-1])
@@ -606,6 +708,12 @@ async def admin_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         await query.answer(f"🗑️ Vouch #{vouch_id} deleted! Target total: {new_total}", show_alert=True)
         
+        status_note = f"🗑️ <b>Deleted by {safe_md(admin_name)}</b>"
+        new_text = update_log_text(current_text, status_note)
+        
+        # Remove buttons completely on delete
+        await query.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=None)
+        
     elif data.startswith("admin_flag_user_"):
         target_id = int(data.split("_")[-1])
         err = await asyncio.to_thread(flag_user_db_sync, target_id)
@@ -615,6 +723,12 @@ async def admin_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
         await query.answer(f"🚩 User {target_id} successfully flagged!", show_alert=True)
         
+        status_note = f"🚩 <b>Target Flagged by {safe_md(admin_name)}</b>"
+        new_text = update_log_text(current_text, status_note)
+        
+        reply_markup = rebuild_log_keyboard(vouch_id, recipient_id, include_verify=False) if vouch_id else None
+        await query.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=reply_markup)
+        
     elif data.startswith("admin_unflag_user_"):
         target_id = int(data.split("_")[-1])
         err = await asyncio.to_thread(unflag_user_db_sync, target_id)
@@ -623,3 +737,9 @@ async def admin_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
             
         await query.answer(f"🟢 User {target_id} successfully unflagged!", show_alert=True)
+        
+        status_note = f"🟢 <b>Target Unflagged by {safe_md(admin_name)}</b>"
+        new_text = update_log_text(current_text, status_note)
+        
+        reply_markup = rebuild_log_keyboard(vouch_id, recipient_id, include_verify=False) if vouch_id else None
+        await query.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=reply_markup)

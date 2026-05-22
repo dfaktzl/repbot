@@ -145,7 +145,7 @@ def main():
     app.add_handler(CallbackQueryHandler(broadcast_callback,          pattern=r"^bc_"))
     app.add_handler(CallbackQueryHandler(check_legacy_page_callback,  pattern=r"^chkl_"))
     app.add_handler(CallbackQueryHandler(check_page_callback,         pattern=r"^chk_"))
-    app.add_handler(CallbackQueryHandler(admin_log_callback,          pattern=r"^admin_(toggle_vouch|delete_vouch|flag_user|unflag_user)_"))
+    app.add_handler(CallbackQueryHandler(admin_log_callback,          pattern=r"^admin_(approve_vouch|toggle_vouch|delete_vouch|flag_user|unflag_user)_"))
 
     # ── Vouch triggers: explicit +/-vouch/rep/1, spaced variants, and bare 'vouch'/'rep' in replies ──
     vouch_regex = (
