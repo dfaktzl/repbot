@@ -33,7 +33,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(BigInteger, primary_key=True)       # Telegram User ID (static)
+    id = Column("user_id", BigInteger, primary_key=True)       # Telegram User ID (static)
     username = Column(String, nullable=True)          # @username (can change)
     first_name = Column(String, nullable=True)
     last_name = Column(String, nullable=True)
@@ -69,8 +69,8 @@ class Vouch(Base):
     __tablename__ = "vouches"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    voucher_id = Column(BigInteger, ForeignKey("users.id"))
-    recipient_id = Column(BigInteger, ForeignKey("users.id"))
+    voucher_id = Column(BigInteger, ForeignKey("users.user_id"))
+    recipient_id = Column(BigInteger, ForeignKey("users.user_id"))
     value = Column(Integer, default=1)                # +1 or -1
     message_content = Column(String, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -100,7 +100,7 @@ class LongMessage(Base):
     __tablename__ = "long_messages"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"))
+    user_id = Column(BigInteger, ForeignKey("users.user_id"))
     chat_id = Column(BigInteger, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     length = Column(Integer)
@@ -115,7 +115,7 @@ class SexWorkerTrigger(Base):
     __tablename__ = "sex_worker_triggers"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"))
+    user_id = Column(BigInteger, ForeignKey("users.user_id"))
     chat_id = Column(BigInteger, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     trigger_word = Column(String)
@@ -130,7 +130,7 @@ class PolicyViolation(Base):
     __tablename__ = "policy_violations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"))
+    user_id = Column(BigInteger, ForeignKey("users.user_id"))
     chat_id = Column(BigInteger, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     term = Column(String, nullable=True)  # The blacklisted term that was matched
@@ -184,13 +184,34 @@ class BotMessage(Base):
 #  DATABASE SETUP
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Use absolute path based on this file's location (never depends on cwd)
-_DB_DIR = Path(__file__).parent.resolve()
-_DB_PATH = _DB_DIR / "bot_database.db"
+# Use absolute path based on environment variable or fallback
+import os
+from sqlalchemy import event
+
+_env_db_path = os.getenv("SHARED_DB_PATH")
+if _env_db_path:
+    _DB_PATH = Path(_env_db_path)
+else:
+    _DB_DIR = Path(__file__).parent.resolve()
+    _DB_PATH = _DB_DIR / "bot_database.db"
+
+# Ensure target parent directory exists
+try:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+
 DATABASE_URL = f"sqlite:///{_DB_PATH}"
 
-engine = create_engine(DATABASE_URL, echo=False)
+engine = create_engine(DATABASE_URL, connect_args={"timeout": 5.0}, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
 
 
 @contextmanager
@@ -333,9 +354,19 @@ def init_db():
         # Users table migrations
         cursor.execute("PRAGMA table_info(users)")
         user_columns = [row[1] for row in cursor.fetchall()]
-        for col_name in ("is_sex_worker", "is_dangerous"):
+        columns_to_check = [
+            ("is_sex_worker", "INTEGER DEFAULT 0"),
+            ("is_dangerous", "INTEGER DEFAULT 0"),
+            ("is_verified", "INTEGER DEFAULT 0"),
+            ("vouched_by", "INTEGER DEFAULT NULL"),
+            ("vouch_count", "INTEGER DEFAULT 0"),
+            ("join_date", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ("status", "TEXT DEFAULT 'active'"),
+            ("kick_count", "INTEGER DEFAULT 0"),
+        ]
+        for col_name, col_def in columns_to_check:
             if col_name not in user_columns:
-                cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} INTEGER DEFAULT 0")
+                cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}")
                 conn.commit()
                 logger.info(f"Migration: added '{col_name}' column to users table.")
 

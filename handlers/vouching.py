@@ -4,10 +4,11 @@ Vouch handling: explicit triggers (+vouch, -vouch, etc.) and sentiment-based det
 
 import logging
 import re
+import asyncio
 from datetime import datetime, timezone
 
 from sqlalchemy import func
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import (
@@ -18,6 +19,7 @@ from config import (
     SENTIMENT_MIN_SCORE,
     SENTIMENT_MIN_WORDS,
     VOUCH_TRIGGER_RE,
+    ADMIN_IDS,
 )
 from database import SessionLocal, User, Vouch, get_bot_message, get_session, get_setting
 from helpers import (
@@ -36,9 +38,168 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  EXPLICIT VOUCH HANDLER
+#  THREAD-SAFE SYNCHRONOUS TRANSACTION HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def process_vouch_db_sync(
+    voucher_id: int,
+    voucher_username: str | None,
+    voucher_first_name: str,
+    voucher_last_name: str | None,
+    recipient_id: int,
+    recipient_username: str | None,
+    recipient_first_name: str,
+    recipient_last_name: str | None,
+    value: int,
+    comment_text: str,
+    chat_id: int,
+    chat_label_str: str,
+) -> tuple[int | None, int | None, str | None]:
+    """
+    Synchronous, thread-safe database transaction for checking and inserting a vouch.
+    Returns a tuple of: (vouch_id, recipient_new_vouches, error_message)
+    """
+    session = SessionLocal()
+    try:
+        from types import SimpleNamespace
+        voucher_obj = SimpleNamespace(
+            id=voucher_id,
+            username=voucher_username,
+            first_name=voucher_first_name,
+            last_name=voucher_last_name,
+            is_bot=False
+        )
+        recipient_obj = SimpleNamespace(
+            id=recipient_id,
+            username=recipient_username,
+            first_name=recipient_first_name,
+            last_name=recipient_last_name,
+            is_bot=False
+        )
+        
+        voucher_db = ensure_user(session, voucher_obj, chat_label_str=chat_label_str)
+        recipient_db = ensure_user(session, recipient_obj, chat_label_str=chat_label_str)
+        session.flush()
+
+        error = validate_vouch(session, voucher_db, voucher_obj, recipient_obj, value, comment_text)
+        if error:
+            return None, None, error
+
+        new_vouch = Vouch(
+            voucher_id=voucher_id,
+            recipient_id=recipient_id,
+            value=value,
+            message_content=comment_text[:500] if comment_text else None,
+            timestamp=datetime.now(timezone.utc),
+            chat_id=chat_id,
+        )
+        session.add(new_vouch)
+        recipient_db.vouches += value
+        session.flush()
+        
+        vouch_id = new_vouch.id
+        new_total = recipient_db.vouches
+        session.commit()
+        return vouch_id, new_total, None
+    except Exception as e:
+        session.rollback()
+        logger.error(f"process_vouch_db_sync error: {e}", exc_info=True)
+        return None, None, f"❌ Database error: {e}"
+    finally:
+        session.close()
+
+
+def toggle_vouch_db_sync(vouch_id: int) -> tuple[int, int, str]:
+    """Toggles vouch value between +1 and -1 and corrects recipient rep."""
+    session = SessionLocal()
+    try:
+        vouch = session.query(Vouch).filter(Vouch.id == vouch_id).first()
+        if not vouch:
+            return 0, 0, "Vouch not found"
+        old_val = vouch.value
+        new_val = -1 if old_val == 1 else 1
+        vouch.value = new_val
+        
+        recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
+        new_total = 0
+        if recipient:
+            recipient.vouches += (new_val - old_val)
+            new_total = recipient.vouches
+            
+        session.commit()
+        return new_val, new_total, ""
+    except Exception as e:
+        session.rollback()
+        return 0, 0, str(e)
+    finally:
+        session.close()
+
+
+def delete_vouch_db_sync(vouch_id: int) -> tuple[int, str]:
+    """Deletes a vouch entirely and corrects recipient rep."""
+    session = SessionLocal()
+    try:
+        vouch = session.query(Vouch).filter(Vouch.id == vouch_id).first()
+        if not vouch:
+            return 0, "Vouch not found"
+        val = vouch.value
+        recipient_id = vouch.recipient_id
+        session.delete(vouch)
+        
+        recipient = session.query(User).filter(User.id == recipient_id).first()
+        new_total = 0
+        if recipient:
+            recipient.vouches -= val
+            new_total = recipient.vouches
+            
+        session.commit()
+        return new_total, ""
+    except Exception as e:
+        session.rollback()
+        return 0, str(e)
+    finally:
+        session.close()
+
+
+def flag_user_db_sync(target_user_id: int) -> str:
+    """Flags a user as suspicious/scammer."""
+    session = SessionLocal()
+    try:
+        db_user = session.query(User).filter(User.id == target_user_id).first()
+        if not db_user:
+            return "User not found in database"
+        db_user.is_flagged = 1
+        db_user.flag_reason = "Admin flagged via log channel controls"
+        session.commit()
+        return ""
+    except Exception as e:
+        session.rollback()
+        return str(e)
+    finally:
+        session.close()
+
+
+def unflag_user_db_sync(target_user_id: int) -> str:
+    """Unflags a user."""
+    session = SessionLocal()
+    try:
+        db_user = session.query(User).filter(User.id == target_user_id).first()
+        if not db_user:
+            return "User not found in database"
+        db_user.is_flagged = 0
+        db_user.flag_reason = None
+        session.commit()
+        return ""
+    except Exception as e:
+        session.rollback()
+        return str(e)
+    finally:
+        session.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  EXPLICIT VOUCH HANDLER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     console = context.bot_data.get("console")
@@ -46,6 +207,7 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
     recipient_tg = None
     direct_comment = ""
+    cl = chat_label(update.effective_chat)
 
     # ── 1. Determine recipient ────────────────────────────────────────────────
     if update.message.reply_to_message:
@@ -55,7 +217,17 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) >= 2:
             target = parts[1]
 
-            if target.startswith("@"):
+            # Dynamic vouch parsing check: Check for a text_mention entity first
+            text_mention_user = None
+            if update.message.entities:
+                for entity in update.message.entities:
+                    if entity.type == "text_mention" and entity.user:
+                        text_mention_user = entity.user
+                        break
+
+            if text_mention_user:
+                recipient_tg = text_mention_user
+            elif target.startswith("@"):
                 uname = target[1:]
                 with get_session() as _sess:
                     db_user = _sess.query(User).filter(
@@ -117,7 +289,16 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif comment_text.split() and comment_text.split()[0].isdigit():
             comment_text = " ".join(comment_text.split()[1:])
 
-    # ── 3b. Content-override: +vouch with clearly negative comment → flip to -1 ──
+    # ── 3b. Enforce reason for negative vouches ──────────────────────────────
+    if value == -1 and (not comment_text or not comment_text.strip()):
+        await update.message.reply_text(
+            "❌ **Negative vouch requires a reason.**\n"
+            "Please run: `-vouch @username <reason/comment>`",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── 3c. Content-override: +vouch with clearly negative comment → flip to -1 ──
     content_overridden = False
     if value == 1 and comment_text and comment_text.strip():
         unique_neg_hits = len(set(m.lower() for m in NEG_PATTERN.findall(comment_text)))
@@ -125,7 +306,7 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             value = -1
             content_overridden = True
 
-    # ── 4. Content moderation ─────────────────────────────────────────────────
+    # ── 4. Content moderation (check blacklist) ───────────────────────────────
     session = SessionLocal()
     try:
         if await check_blacklist(message_text, voucher_user, update.effective_chat, context, session, console):
@@ -135,102 +316,113 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
             )
             return
-
-        # ── 5. Ensure users exist + validate ──────────────────────────────────
-        voucher_db = ensure_user(session, voucher_user, console=console)
-        recipient_db = ensure_user(session, recipient_tg, console=console)
-        session.flush()
-
-        error = validate_vouch(session, voucher_db, voucher_user, recipient_tg, value, comment_text)
-        if error:
-            await update.message.reply_text(error, parse_mode="Markdown")
-            return
-
-        # ── 6. Record vouch ───────────────────────────────────────────────────
-        new_vouch = Vouch(
-            voucher_id=voucher_user.id,
-            recipient_id=recipient_tg.id,
-            value=value,
-            message_content=comment_text[:500] if comment_text else None,
-            timestamp=datetime.now(timezone.utc),
-            chat_id=update.effective_chat.id,
-        )
-        session.add(new_vouch)
-        recipient_db.vouches += value
-        session.commit()
-
-        # ── 7. Response ──────────────────────────────────────────────────────
-        action = "increased" if value > 0 else "decreased"
-        icon = "✅" if value > 0 else "❌"
-        ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        comment_display = safe_md(comment_text[:120]) if comment_text else "(none)"
-
-        override_note = ""
-        if content_overridden:
-            override_note = (
-                "\n\n⚠️ *Auto-corrected to NEGATIVE* — your comment contained strong negative keywords.\n"
-                "_If this is wrong, contact an admin to flip it._"
-            )
-
-        reply_msg = fix_surrogates(
-            get_bot_message(
-                "msg_vouch_success",
-                icon=icon,
-                vouch_id=new_vouch.id,
-                voucher_name=safe_md(voucher_user.first_name),
-                voucher_id=voucher_user.id,
-                recipient_name=safe_md(recipient_tg.first_name),
-                recipient_id=recipient_tg.id,
-                comment=comment_display,
-                value_str=f"{value:+d}",
-                action=action,
-                new_total=recipient_db.vouches,
-                timestamp=ts_now,
-                divider="\u2500" * 24,
-            ) + override_note
-        )
-        await update.message.reply_text(reply_msg, parse_mode="Markdown")
-
-        cl = chat_label(update.effective_chat)
-        if console:
-            v_uname = f"@{voucher_user.username}" if voucher_user.username else f"ID: `{voucher_user.id}`"
-            r_uname = (
-                f"@{getattr(recipient_tg, 'username', None)}"
-                if getattr(recipient_tg, "username", None)
-                else f"ID: `{recipient_tg.id}`"
-            )
-            console.print(
-                f"[vouch]{icon} VOUCH #{new_vouch.id}: "
-                f"{voucher_user.first_name} ({v_uname}) → {recipient_tg.first_name} ({r_uname}) "
-                f"({value:+d}) in [magenta]{cl}[/magenta][/vouch]"
-            )
-
-        # Log to channel
-        if LOG_CHANNEL:
-            try:
-                log_msg = fix_surrogates(
-                    f"🔔 **New Vouch** (ID: `{new_vouch.id}`)\n"
-                    f"👤 Voucher: {safe_md(voucher_user.first_name)} (`{voucher_user.id}`)\n"
-                    f"🎯 Target: {safe_md(recipient_tg.first_name)} (`{recipient_tg.id}`)\n"
-                    f"💎 Value: {icon} ({value:+d})\n"
-                    f"📝 Comment: {safe_md(comment_text) or 'None'}"
-                )
-                await context.bot.send_message(chat_id=LOG_CHANNEL, text=log_msg, parse_mode="Markdown")
-            except Exception as e:
-                logger.warning(f"Failed to log vouch to channel: {e}")
-
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Vouch error: {e}", exc_info=True)
-        await update.message.reply_text("❌ An error occurred. Please try again.")
+    except Exception as mod_err:
+        logger.warning(f"Moderation check error: {mod_err}")
     finally:
         session.close()
+
+    # ── 5. Offload Vouch Transaction to Thread ────────────────────────────────
+    vouch_id, new_total, error = await asyncio.to_thread(
+        process_vouch_db_sync,
+        voucher_user.id,
+        voucher_user.username,
+        voucher_user.first_name,
+        voucher_user.last_name,
+        recipient_tg.id,
+        getattr(recipient_tg, "username", None),
+        recipient_tg.first_name,
+        getattr(recipient_tg, "last_name", None),
+        value,
+        comment_text,
+        update.effective_chat.id,
+        cl,
+    )
+
+    if error:
+        await update.message.reply_text(error, parse_mode="Markdown")
+        return
+
+    # ── 6. Response ──────────────────────────────────────────────────────────
+    action = "increased" if value > 0 else "decreased"
+    icon = "✅" if value > 0 else "❌"
+    ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    comment_display = safe_md(comment_text[:120]) if comment_text else "(none)"
+
+    override_note = ""
+    if content_overridden:
+        override_note = (
+            "\n\n⚠️ *Auto-corrected to NEGATIVE* — your comment contained strong negative keywords.\n"
+            "_If this is wrong, contact an admin to flip it._"
+        )
+
+    reply_msg = fix_surrogates(
+        get_bot_message(
+            "msg_vouch_success",
+            icon=icon,
+            vouch_id=vouch_id,
+            voucher_name=safe_md(voucher_user.first_name),
+            voucher_id=voucher_user.id,
+            recipient_name=safe_md(recipient_tg.first_name),
+            recipient_id=recipient_tg.id,
+            comment=comment_display,
+            value_str=f"{value:+d}",
+            action=action,
+            new_total=new_total,
+            timestamp=ts_now,
+            divider="\u2500" * 24,
+        ) + override_note
+    )
+    await update.message.reply_text(reply_msg, parse_mode="Markdown")
+
+    if console:
+        v_uname = f"@{voucher_user.username}" if voucher_user.username else f"ID: `{voucher_user.id}`"
+        r_uname = (
+            f"@{getattr(recipient_tg, 'username', None)}"
+            if getattr(recipient_tg, "username", None)
+            else f"ID: `{recipient_tg.id}`"
+        )
+        console.print(
+            f"[vouch]{icon} VOUCH #{vouch_id}: "
+            f"{voucher_user.first_name} ({v_uname}) → {recipient_tg.first_name} ({r_uname}) "
+            f"({value:+d}) in [magenta]{cl}[/magenta][/vouch]"
+        )
+
+    # ── 7. Global Log Channel with Interactive Callback Buttons ─────────────
+    if LOG_CHANNEL:
+        try:
+            keyboard = [
+                [
+                    InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
+                    InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
+                ],
+                [
+                    InlineKeyboardButton("🚩 Flag User", callback_data=f"admin_flag_user_{recipient_tg.id}"),
+                    InlineKeyboardButton("🟢 Unflag User", callback_data=f"admin_unflag_user_{recipient_tg.id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            log_msg = fix_surrogates(
+                f"🔔 <b>New Vouch</b> (ID: <code>{vouch_id}</code>)\n"
+                f"──────────────────────────\n"
+                f"👤 <b>Voucher:</b> <a href=\"tg://user?id={voucher_user.id}\">{safe_md(voucher_user.first_name)}</a> (<code>{voucher_user.id}</code>)\n"
+                f"🎯 <b>Target:</b> <a href=\"tg://user?id={recipient_tg.id}\">{safe_md(recipient_tg.first_name)}</a> (<code>{recipient_tg.id}</code>)\n"
+                f"💎 <b>Value:</b> {icon} (<code>{value:+d}</code>)\n"
+                f"📝 <b>Comment:</b> <i>{safe_md(comment_text) or 'None'}</i>"
+            )
+            await context.bot.send_message(
+                chat_id=LOG_CHANNEL,
+                text=log_msg,
+                parse_mode="HTML",
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log vouch to channel: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SENTIMENT-BASED VOUCH DETECTION
 # ═══════════════════════════════════════════════════════════════════════════════
-
 
 def _score_sentiment(text: str) -> tuple[int, int]:
     """Score text against positive/negative keyword lists."""
@@ -241,10 +433,7 @@ def _score_sentiment(text: str) -> tuple[int, int]:
 
 async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Detect natural language vouches from replies.
-    Requires 2+ positive OR 2+ negative keywords, must be a reply,
-    and must not be ambiguous (no mixed sentiment).
     Skipped entirely when sentiment_enabled setting is '0'."""
-    # ── Check persistent toggle ──
     if get_setting("sentiment_enabled", "1") != "1":
         return
 
@@ -263,7 +452,6 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
     if len(words) < SENTIMENT_MIN_WORDS:
         return
 
-    # Skip if explicit vouch regex already matched
     if VOUCH_TRIGGER_RE.match(text):
         return
 
@@ -278,7 +466,7 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
 
     voucher_user = update.effective_user
 
-    # Silent validations (don't nag for natural language)
+    # Silent validations
     if voucher_user.id == recipient_tg.id:
         return
     if getattr(recipient_tg, "is_bot", False):
@@ -289,72 +477,149 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
         if await check_blacklist(text, voucher_user, update.effective_chat, context, session, console):
             session.commit()
             return
-
-        voucher_db = ensure_user(session, voucher_user, console=console)
-        recipient_db = ensure_user(session, recipient_tg, console=console)
-        session.flush()
-
-        # Use shared validation (returns error string or None)
-        error = validate_vouch(session, voucher_db, voucher_user, recipient_tg, value, text)
-        if error:
-            return  # Silent skip for sentiment vouches
-
-        comment_text = text.strip()
-
-        new_vouch = Vouch(
-            voucher_id=voucher_user.id,
-            recipient_id=recipient_tg.id,
-            value=value,
-            message_content=comment_text[:500] if comment_text else None,
-            timestamp=datetime.now(timezone.utc),
-            chat_id=update.effective_chat.id,
-        )
-        session.add(new_vouch)
-        recipient_db.vouches += value
-        session.commit()
-
-        # Shorter, less disruptive response for auto-detected vouches
-        icon = "✅" if value > 0 else "❌"
-        action = "increased" if value > 0 else "decreased"
-
-        divider = "\u2500" * 24
-        footer = fix_surrogates(get_bot_message("msg_sentiment_footer"))
-        reply_msg = fix_surrogates(
-            f"\U0001f9e0 **Auto-Detected Vouch**\n"
-            f"{divider}\n"
-            f"{icon} {safe_md(voucher_user.first_name)} \u2192 {safe_md(recipient_tg.first_name)} "
-            f"(`{value:+d}`) | New total: `{recipient_db.vouches}`\n"
-            f"\u23f3 Pending manual review\n"
-            f"{footer}"
-        )
-        await msg.reply_text(reply_msg, parse_mode="Markdown")
-
-        cl = chat_label(update.effective_chat)
-        if console:
-            v_uname = f"@{voucher_user.username}" if voucher_user.username else f"ID: {voucher_user.id}"
-            r_uname = f"@{recipient_tg.username}" if getattr(recipient_tg, "username", None) else f"ID: {recipient_tg.id}"
-            console.print(
-                f"[vouch]🧠 SENTIMENT VOUCH #{new_vouch.id}: "
-                f"{voucher_user.first_name} ({v_uname}) → {recipient_tg.first_name} ({r_uname}) "
-                f"({value:+d}, pos={pos} neg={neg}) in [magenta]{cl}[/magenta][/vouch]"
-            )
-
-        if LOG_CHANNEL:
-            try:
-                log_msg = fix_surrogates(
-                    f"🧠 **Sentiment Vouch** (ID: `{new_vouch.id}`)\n"
-                    f"👤 Voucher: {safe_md(voucher_user.first_name)} (`{voucher_user.id}`)\n"
-                    f"🎯 Target: {safe_md(recipient_tg.first_name)} (`{recipient_tg.id}`)\n"
-                    f"💎 Value: {icon} ({value:+d})\n"
-                    f"📊 Keywords: {pos} pos / {neg} neg\n"
-                    f"📝 Message: {safe_md(text[:120])}"
-                )
-                await context.bot.send_message(chat_id=LOG_CHANNEL, text=log_msg, parse_mode="Markdown")
-            except Exception as e:
-                logger.warning(f"Failed to log sentiment vouch: {e}")
-
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Sentiment vouch error: {e}", exc_info=True)
+    except Exception as mod_err:
+        logger.warning(f"Moderation check error: {mod_err}")
     finally:
         session.close()
+
+    cl = chat_label(update.effective_chat)
+
+    # ── Offload Vouch Transaction to Thread ──
+    vouch_id, new_total, error = await asyncio.to_thread(
+        process_vouch_db_sync,
+        voucher_user.id,
+        voucher_user.username,
+        voucher_user.first_name,
+        voucher_user.last_name,
+        recipient_tg.id,
+        getattr(recipient_tg, "username", None),
+        recipient_tg.first_name,
+        getattr(recipient_tg, "last_name", None),
+        value,
+        text,
+        update.effective_chat.id,
+        cl,
+    )
+
+    if error:
+        return  # Silent skip for sentiment vouches
+
+    # Shorter, less disruptive response
+    icon = "✅" if value > 0 else "❌"
+    divider = "\u2500" * 24
+    footer_text = fix_surrogates(get_bot_message("msg_sentiment_footer"))
+    
+    # We build the multi-line string explicitly avoiding any backslashes inside curly braces
+    reply_msg = fix_surrogates(
+        (
+            "🧠 <b>Auto-Detected Vouch</b>\n"
+            "{divider}\n"
+            "{icon} {voucher_name} → {recipient_name} ({value:+d}) | New total: <code>{new_total}</code>\n"
+            "⏳ Pending manual review\n"
+            "{footer}"
+        ).format(
+            divider=divider,
+            icon=icon,
+            voucher_name=safe_md(voucher_user.first_name),
+            recipient_name=safe_md(recipient_tg.first_name),
+            value=value,
+            new_total=new_total,
+            footer=footer_text
+        )
+    )
+    
+    await msg.reply_text(reply_msg, parse_mode="HTML")
+
+    if console:
+        v_uname = f"@{voucher_user.username}" if voucher_user.username else f"ID: {voucher_user.id}"
+        r_uname = f"@{recipient_tg.username}" if getattr(recipient_tg, "username", None) else f"ID: {recipient_tg.id}"
+        console.print(
+            f"[vouch]🧠 SENTIMENT VOUCH #{vouch_id}: "
+            f"{voucher_user.first_name} ({v_uname}) → {recipient_tg.first_name} ({r_uname}) "
+            f"({value:+d}, pos={pos} neg={neg}) in [magenta]{cl}[/magenta][/vouch]"
+        )
+
+    # ── Log to global channel with buttons ──
+    if LOG_CHANNEL:
+        try:
+            keyboard = [
+                [
+                    InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
+                    InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
+                ],
+                [
+                    InlineKeyboardButton("🚩 Flag User", callback_data=f"admin_flag_user_{recipient_tg.id}"),
+                    InlineKeyboardButton("🟢 Unflag User", callback_data=f"admin_unflag_user_{recipient_tg.id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            log_msg = fix_surrogates(
+                f"🧠 <b>Sentiment Vouch Detected</b> (ID: <code>{vouch_id}</code>)\n"
+                f"──────────────────────────\n"
+                f"👤 <b>Voucher:</b> <a href=\"tg://user?id={voucher_user.id}\">{safe_md(voucher_user.first_name)}</a> (<code>{voucher_user.id}</code>)\n"
+                f"🎯 <b>Target:</b> <a href=\"tg://user?id={recipient_tg.id}\">{safe_md(recipient_tg.first_name)}</a> (<code>{recipient_tg.id}</code>)\n"
+                f"💎 <b>Value:</b> {icon} (<code>{value:+d}</code>)\n"
+                f"📊 <b>Keywords:</b> <code>{pos} pos / {neg} neg</code>\n"
+                f"📝 <b>Message:</b> <i>{safe_md(text[:120])}</i>"
+            )
+            await context.bot.send_message(
+                chat_id=LOG_CHANNEL,
+                text=log_msg,
+                parse_mode="HTML",
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log sentiment vouch: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  INTERACTIVE LOG CHANNEL BUTTON CALLBACK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def admin_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback query handler for interactive log channel admin buttons."""
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    if user_id not in ADMIN_IDS:
+        await query.answer("❌ Unauthorized Access: Admins Only", show_alert=True)
+        return
+
+    data = query.data
+    
+    if data.startswith("admin_toggle_vouch_"):
+        vouch_id = int(data.split("_")[-1])
+        new_val, new_total, err = await asyncio.to_thread(toggle_vouch_db_sync, vouch_id)
+        if err:
+            await query.answer(f"❌ Error: {err}", show_alert=True)
+            return
+        
+        await query.answer(f"🔄 Vouch #{vouch_id} toggled to {new_val:+d}! Target total: {new_total}", show_alert=True)
+        
+    elif data.startswith("admin_delete_vouch_"):
+        vouch_id = int(data.split("_")[-1])
+        new_total, err = await asyncio.to_thread(delete_vouch_db_sync, vouch_id)
+        if err:
+            await query.answer(f"❌ Error: {err}", show_alert=True)
+            return
+        
+        await query.answer(f"🗑️ Vouch #{vouch_id} deleted! Target total: {new_total}", show_alert=True)
+        
+    elif data.startswith("admin_flag_user_"):
+        target_id = int(data.split("_")[-1])
+        err = await asyncio.to_thread(flag_user_db_sync, target_id)
+        if err:
+            await query.answer(f"❌ Error: {err}", show_alert=True)
+            return
+            
+        await query.answer(f"🚩 User {target_id} successfully flagged!", show_alert=True)
+        
+    elif data.startswith("admin_unflag_user_"):
+        target_id = int(data.split("_")[-1])
+        err = await asyncio.to_thread(unflag_user_db_sync, target_id)
+        if err:
+            await query.answer(f"❌ Error: {err}", show_alert=True)
+            return
+            
+        await query.answer(f"🟢 User {target_id} successfully unflagged!", show_alert=True)

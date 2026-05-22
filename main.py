@@ -93,7 +93,7 @@ def main():
         cmd_mydata,
         cmd_start,
     )
-    from handlers.vouching import handle_sentiment_vouch, handle_vouch
+    from handlers.vouching import handle_sentiment_vouch, handle_vouch, admin_log_callback
     from handlers.admin import (
         broadcast_callback,
         cmd_broadcast,
@@ -113,7 +113,7 @@ def main():
         panel_nav_callback,
     )
     from handlers.passive import passive_user_listener
-    from handlers.welcome import handle_welcome
+    from handlers.welcome import handle_welcome, handle_user_join
 
     # ── User commands ──
     app.add_handler(CommandHandler("start",  cmd_start))
@@ -140,6 +140,7 @@ def main():
     app.add_handler(CallbackQueryHandler(broadcast_callback,          pattern=r"^bc_"))
     app.add_handler(CallbackQueryHandler(check_legacy_page_callback,  pattern=r"^chkl_"))
     app.add_handler(CallbackQueryHandler(check_page_callback,         pattern=r"^chk_"))
+    app.add_handler(CallbackQueryHandler(admin_log_callback,          pattern=r"^admin_(toggle_vouch|delete_vouch|flag_user|unflag_user)_"))
 
     # ── Vouch triggers: explicit +/-vouch/rep/1, spaced variants, and bare 'vouch'/'rep' in replies ──
     vouch_regex = (
@@ -164,8 +165,9 @@ def main():
         group=2,
     )
 
-    # ── Welcome when added to group ──
+    # ── Welcome when added to group / when user joins ──
     app.add_handler(ChatMemberHandler(handle_welcome, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(ChatMemberHandler(handle_user_join, ChatMemberHandler.CHAT_MEMBER))
 
     # ── Passive listener ──
     app.add_handler(TypeHandler(Update, passive_user_listener), group=1)

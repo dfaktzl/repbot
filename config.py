@@ -23,10 +23,12 @@ if _raw:
     )
 
 # ─── Log Channel ──────────────────────────────────────────────────────────────
-LOG_CHANNEL = os.getenv("LOG_CHANNEL")
+LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "-1003817851175"))
 
-# ─── Gatekeeper Bot Cross-Reference (optional) ───────────────────────────────
+# ─── Gatekeeper Bot Cross-Reference & Enforcement ─────────────────────────────
 GATEKEEPER_DB_PATH = os.getenv("GATEKEEPER_DB_PATH", "")
+GATEKEEPER_CHANNEL_ID = int(os.getenv("GATEKEEPER_CHANNEL_ID", "-1003885954803"))
+SOCIAL_GROUP_ID = int(os.getenv("SOCIAL_GROUP_ID", "-1003769928131"))
 
 # ─── Vouch Rules ──────────────────────────────────────────────────────────────
 MIN_ACCOUNT_AGE_HOURS = 48
