@@ -37,6 +37,15 @@ def _sentiment_label():
     on = get_setting("sentiment_enabled", "1") == "1"
     return "🧠 Sentiment: ✅ ON" if on else "🧠 Sentiment: ❌ OFF"
 
+def _timer_label(key, name):
+    t = get_setting(key, "0")
+    if t == "0" or not t.isdigit():
+        return f"⏱️ {name}: ❌ OFF"
+    sec = int(t)
+    if sec % 60 == 0:
+        return f"⏱️ {name}: {sec // 60} min"
+    return f"⏱️ {name}: {sec} sec"
+
 
 # ── Single-vouch view (one pending vouch at a time) ──────────────────────────
 
@@ -171,6 +180,7 @@ async def panel_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [_btn(_sentiment_label(), "ap_toggle_sentiment")],
+                [_btn("⏱️ Delete Timers", "ap_timers_menu")],
                 [_btn("⬅️ Back", "ap_home")],
             ]),
         )
@@ -183,8 +193,41 @@ async def panel_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [_btn(_sentiment_label(), "ap_toggle_sentiment")],
+                [_btn("⏱️ Delete Timers", "ap_timers_menu")],
                 [_btn("⬅️ Back", "ap_home")],
             ]),
+        )
+
+    elif d == "ap_timers_menu":
+        await q.message.edit_text(
+            "⏱️ **Message Delete Timers**\n" + "━" * 28 + "\n"
+            "Configure how long user-facing notifications remain in channels before self-destructing. Set to 0 to disable deletion.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [_btn(_timer_label("welcome_delete_timer", "Welcome Msg"), "ap_edit_timer_welcome")],
+                [_btn(_timer_label("kick_delete_timer", "Kick Msg"), "ap_edit_timer_kick")],
+                [_btn(_timer_label("ban_delete_timer", "Ban Msg"), "ap_edit_timer_ban")],
+                [_btn("⬅️ Back", "ap_settings")],
+            ]),
+        )
+
+    elif d.startswith("ap_edit_timer_"):
+        key = d[14:] # welcome, kick, or ban
+        full_key = f"{key}_delete_timer"
+        context.user_data["ap_editing"] = full_key
+        current = get_setting(full_key, "0")
+        
+        name_map = {"welcome": "Welcome Card", "kick": "Gatekeeper Kick Msg", "ban": "Gatekeeper Ban Msg"}
+        friendly_name = name_map.get(key, "Message")
+        
+        await q.message.edit_text(
+            f"⏱️ **Edit {friendly_name} Delete Timer**\n{'━'*28}\n"
+            f"Current Timer: `{current}` seconds\n\n"
+            f"↩️ **Reply with the number of seconds** you want these messages to stay visible before deletion "
+            f"(e.g., `300` for 5 minutes, or `0` to disable auto-deletion).\n\n"
+            f"Send /cancel to abort.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[_btn("⬅️ Back", "ap_timers_menu")]]),
         )
 
     # ── Message editor ──
@@ -275,8 +318,9 @@ async def panel_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             new_val = -1 if old_val > 0 else 1
             # Adjust score: undo old, apply new
             if v.verified != -1 and recipient:
-                recipient.vouches -= old_val
-                recipient.vouches += new_val
+                if v.verified == 1 or v.is_sentiment == 0:
+                    recipient.vouches -= old_val
+                    recipient.vouches += new_val
             v.value = new_val
 
         old_icon = "✅" if old_val > 0 else "❌"
@@ -330,6 +374,23 @@ async def admin_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if text.lower() in ("/cancel", "cancel"):
         context.user_data.pop("ap_editing", None)
         await update.message.reply_text("❌ Edit cancelled. Use /panel to return.")
+        return
+
+    if editing_key in ("welcome_delete_timer", "kick_delete_timer", "ban_delete_timer"):
+        if not text.isdigit():
+            await update.message.reply_text("❌ Timer must be a positive number of seconds (or 0 to disable). Try again or /cancel.")
+            return
+        set_setting(editing_key, text)
+        context.user_data.pop("ap_editing", None)
+        
+        name_map = {
+            "welcome_delete_timer": "Welcome Message",
+            "kick_delete_timer": "Kick Message",
+            "ban_delete_timer": "Ban Message"
+        }
+        friendly_name = name_map.get(editing_key, "Message")
+        
+        await update.message.reply_text(f"✅ {friendly_name} Delete Timer updated!\n\nUse /panel to continue.", parse_mode="Markdown")
         return
 
     if len(text) < 3:

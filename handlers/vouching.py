@@ -54,6 +54,7 @@ def process_vouch_db_sync(
     comment_text: str,
     chat_id: int,
     chat_label_str: str,
+    is_sentiment: int = 0,
 ) -> tuple[int | None, int | None, str | None]:
     """
     Synchronous, thread-safe database transaction for checking and inserting a vouch.
@@ -92,9 +93,11 @@ def process_vouch_db_sync(
             message_content=comment_text[:500] if comment_text else None,
             timestamp=datetime.now(timezone.utc),
             chat_id=chat_id,
+            is_sentiment=is_sentiment,
         )
         session.add(new_vouch)
-        recipient_db.vouches += value
+        if not is_sentiment:
+            recipient_db.vouches += value
         session.flush()
         
         vouch_id = new_vouch.id
@@ -123,7 +126,8 @@ def toggle_vouch_db_sync(vouch_id: int) -> tuple[int, int, str]:
         recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
         new_total = 0
         if recipient:
-            recipient.vouches += (new_val - old_val)
+            if vouch.verified == 1 or not vouch.is_sentiment:
+                recipient.vouches += (new_val - old_val)
             new_total = recipient.vouches
             
         session.commit()
@@ -144,14 +148,15 @@ def delete_vouch_db_sync(vouch_id: int) -> tuple[int, str]:
             return 0, "Vouch not found"
         val = vouch.value
         recipient_id = vouch.recipient_id
-        session.delete(vouch)
         
         recipient = session.query(User).filter(User.id == recipient_id).first()
         new_total = 0
         if recipient:
-            recipient.vouches -= val
+            if vouch.verified == 1 or not vouch.is_sentiment:
+                recipient.vouches -= val
             new_total = recipient.vouches
             
+        session.delete(vouch)
         session.commit()
         return new_total, ""
     except Exception as e:
@@ -198,12 +203,20 @@ def unflag_user_db_sync(target_user_id: int) -> str:
 
 
 def approve_vouch_db_sync(vouch_id: int) -> str:
-    """Approves a vouch (sets verified = 1)."""
+    """Approves a vouch (sets verified = 1) and updates recipient rep if sentiment vouch."""
     session = SessionLocal()
     try:
         vouch = session.query(Vouch).filter(Vouch.id == vouch_id).first()
         if not vouch:
             return "Vouch not found"
+        if vouch.verified == 1:
+            return ""
+            
+        if vouch.is_sentiment and vouch.verified == 0:
+            recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
+            if recipient:
+                recipient.vouches += vouch.value
+                
         vouch.verified = 1
         session.commit()
         return ""
@@ -333,7 +346,7 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Normalise spaced operators: "+ vouch" → "+vouch", "- rep" → "-rep"
     normalised = _re.sub(r'^([+\-])\s+(vouch|rep|1)\b', r'\1\2', message_text.strip().lower())
     first_token = normalised.split()[0] if normalised.split() else ""
-    NEGATIVE_TRIGGERS = {"-vouch", "-rep", "-1", "vouch-", "rep-", "1-"}
+    NEGATIVE_TRIGGERS = {"-vouch", "-rep", "-1", "vouch-", "rep-", "1-", "/negvouch"}
     value = -1 if first_token in NEGATIVE_TRIGGERS else 1
 
     # ── 3. Build comment text ─────────────────────────────────────────────────
@@ -557,6 +570,7 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
         text,
         update.effective_chat.id,
         cl,
+        1,  # is_sentiment = 1
     )
 
     if error:

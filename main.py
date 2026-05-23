@@ -66,6 +66,37 @@ def main():
         application.bot_data["console"] = console
         await application.bot.delete_webhook(drop_pending_updates=True)
         me = await application.bot.get_me()
+
+        # Register public command menu (visible to all users)
+        from telegram import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+        public_commands = [
+            BotCommand("vouch", "Vouch for a user with their ID or @username, or reply to someone's message"),
+            BotCommand("negvouch", "Negative vouch a user with their ID or @username — reason required"),
+            BotCommand("check", "Check a user's reputation and vouch history"),
+        ]
+        await application.bot.set_my_commands(public_commands, scope=BotCommandScopeDefault())
+
+        # Register admin command menu (visible only in DMs with each admin)
+        admin_commands = public_commands + [
+            BotCommand("panel", "Admin panel — vouch review and settings"),
+            BotCommand("flagged", "List all flagged users"),
+            BotCommand("unflag", "Unflag a user by ID"),
+            BotCommand("scammer", "Flag a user as scammer"),
+            BotCommand("dangerous", "Mark a user as dangerous"),
+            BotCommand("deletevouch", "Delete a vouch by ID"),
+            BotCommand("forcevouch", "Manually add a vouch"),
+            BotCommand("dbstats", "Database statistics"),
+            BotCommand("dbstatsexport", "Export all vouches as .txt"),
+            BotCommand("broadcast", "Broadcast a message to all users"),
+            BotCommand("noweb", "Shut down the web dashboard"),
+            BotCommand("webactive", "Start the web dashboard"),
+        ]
+        for admin_id in ADMIN_IDS:
+            try:
+                await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+            except Exception:
+                pass  # Admin may not have started a DM with the bot yet
+
         console.print(Panel(
             f"✅ Connected as [bold green]{me.first_name}[/bold green] (@{me.username})\n"
             f"   ID: {me.id} | Admins: {len(ADMIN_IDS)}",
@@ -122,6 +153,7 @@ def main():
     app.add_handler(CommandHandler("help",   cmd_help))
     app.add_handler(CommandHandler("check",  cmd_check))
     app.add_handler(CommandHandler("vouch",  handle_vouch))
+    app.add_handler(CommandHandler("negvouch", handle_vouch))
     app.add_handler(CommandHandler("mydata", cmd_mydata))
 
     # ── Admin commands ──

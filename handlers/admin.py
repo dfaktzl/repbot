@@ -217,9 +217,10 @@ async def cmd_delete_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if vouch.verified != -1:
-            recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
-            if recipient:
-                recipient.vouches -= vouch.value
+            if vouch.verified == 1 or vouch.is_sentiment == 0:
+                recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
+                if recipient:
+                    recipient.vouches -= vouch.value
 
         log_info = (
             f"🗑️ **Vouch Deleted (Admin)**\n"
@@ -652,6 +653,11 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_name = query.from_user.first_name
 
         if action == "v_approve":
+            if vouch.verified == 0:
+                if vouch.is_sentiment:
+                    recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
+                    if recipient:
+                        recipient.vouches += vouch.value
             vouch.verified = 1
             result = fix_surrogates(f"✅ **Vouch #{vouch_id} APPROVED** by {safe_md(admin_name)}")
             if console:
@@ -659,9 +665,10 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif action == "v_reject":
             if vouch.verified != -1:
-                recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
-                if recipient:
-                    recipient.vouches -= vouch.value
+                if vouch.verified == 1 or vouch.is_sentiment == 0:
+                    recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
+                    if recipient:
+                        recipient.vouches -= vouch.value
             vouch.verified = -1
             result = fix_surrogates(
                 f"❌ **Vouch #{vouch_id} REJECTED** by {safe_md(admin_name)}\n"
@@ -672,9 +679,10 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif action == "v_delete":
             if vouch.verified != -1:
-                recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
-                if recipient:
-                    recipient.vouches -= vouch.value
+                if vouch.verified == 1 or vouch.is_sentiment == 0:
+                    recipient = session.query(User).filter(User.id == vouch.recipient_id).first()
+                    if recipient:
+                        recipient.vouches -= vouch.value
             session.delete(vouch)
             result = fix_surrogates(
                 f"🗑️ **Vouch #{vouch_id} DELETED** by {safe_md(admin_name)}\n"

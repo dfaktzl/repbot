@@ -6,7 +6,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from database import SessionLocal
+from database import SessionLocal, get_setting
 from helpers import fix_surrogates, ensure_user
 
 logger = logging.getLogger(__name__)
@@ -125,11 +125,24 @@ async def handle_user_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         try:
-            await context.bot.send_message(
+            sent_msg = await context.bot.send_message(
                 chat_id=chat.id,
                 text=welcome_card,
                 parse_mode="HTML",
                 disable_web_page_preview=True
             )
+            # Fetch delete timer setting and schedule non-blocking background deletion
+            timer_str = get_setting("welcome_delete_timer", "600")
+            if timer_str.isdigit():
+                delay = int(timer_str)
+                if delay > 0:
+                    import asyncio
+                    async def _delete_msg_later(bot, chat_id: int, message_id: int, wait_sec: int):
+                        try:
+                            await asyncio.sleep(wait_sec)
+                            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                        except Exception as delete_err:
+                            logger.warning(f"Failed to auto-delete welcome message {message_id}: {delete_err}")
+                    asyncio.create_task(_delete_msg_later(context.bot, chat.id, sent_msg.message_id, delay))
         except Exception as e:
             logger.error(f"Failed to send HTML welcome banner: {e}")

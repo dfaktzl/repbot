@@ -75,7 +75,10 @@ def _check_gatekeeper(user_id: int) -> str | None:
 
 def _build_vouch_page(session, user, old_total: int, combined_total: int, page: int = 0, page_size: int = 5):
     """Build a single page of vouches (regular + legacy combined)."""
-    reg_count = session.query(Vouch).filter(Vouch.recipient_id == user.id).count()
+    reg_count = session.query(Vouch).filter(
+        Vouch.recipient_id == user.id,
+        (Vouch.is_sentiment == 0) | (Vouch.verified == 1)
+    ).count()
     total_items = reg_count + old_total
     total_pages = max(1, (total_items + page_size - 1) // page_size)
     page = min(page, total_pages - 1)
@@ -86,7 +89,10 @@ def _build_vouch_page(session, user, old_total: int, combined_total: int, page: 
         regular = (
             session.query(Vouch)
             .options(joinedload(Vouch.voucher))
-            .filter(Vouch.recipient_id == user.id)
+            .filter(
+                Vouch.recipient_id == user.id,
+                (Vouch.is_sentiment == 0) | (Vouch.verified == 1)
+            )
             .order_by(Vouch.timestamp.desc())
             .offset(start)
             .limit(min(page_size, reg_count - start))

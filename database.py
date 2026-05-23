@@ -17,11 +17,37 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
     create_engine,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 logger = logging.getLogger(__name__)
+
+class SafeDateTime(TypeDecorator):
+    """Custom DateTime type decorator that gracefully handles invalid date formats in SQLite."""
+    impl = DateTime
+    cache_ok = True
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                # Try standard parsing (handles isoformat)
+                return datetime.fromisoformat(value)
+            except ValueError:
+                # Try fallback standard formats just in case
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                    try:
+                        return datetime.strptime(value, fmt)
+                    except ValueError:
+                        continue
+                logger.warning(f"Failed to parse datetime string: {value!r} - returning None")
+                return None
+        return value
 
 Base = declarative_base()
 
@@ -47,8 +73,8 @@ class User(Base):
     is_dangerous = Column(Integer, default=0)         # 0=Clean, 1=DANGEROUS
 
     # Tracking
-    first_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    last_seen = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    first_seen = Column(SafeDateTime, default=lambda: datetime.now(timezone.utc))
+    last_seen = Column(SafeDateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     received_vouches = relationship(
@@ -76,6 +102,7 @@ class Vouch(Base):
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     chat_id = Column(BigInteger, nullable=True)       # Group where vouch happened
     verified = Column(Integer, default=0)             # 0=Pending, 1=Approved, -1=Rejected
+    is_sentiment = Column(Integer, default=0)         # 0=Regular Vouch, 1=Sentiment-based Vouch
 
     voucher = relationship("User", foreign_keys=[voucher_id], back_populates="given_vouches")
     recipient = relationship("User", foreign_keys=[recipient_id], back_populates="received_vouches")
@@ -85,13 +112,14 @@ class Vouch(Base):
         Index("ix_vouches_voucher_id", "voucher_id"),
         Index("ix_vouches_recipient_id", "recipient_id"),
         Index("ix_vouches_verified", "verified"),
+        Index("ix_vouches_is_sentiment", "is_sentiment"),
         Index("ix_vouches_timestamp", "timestamp"),
     )
 
     def __repr__(self):
         return (
             f"<Vouch(id={self.id}, from={self.voucher_id}, "
-            f"to={self.recipient_id}, val={self.value}, verified={self.verified})>"
+            f"to={self.recipient_id}, val={self.value}, verified={self.verified}, is_sentiment={self.is_sentiment})>"
         )
 
 
@@ -330,6 +358,9 @@ _DEFAULT_MESSAGES = [
 # ─── Default settings ─────────────────────────────────────────────────────────
 _DEFAULT_SETTINGS = [
     ("sentiment_enabled", "1"),
+    ("welcome_delete_timer", "600"),
+    ("kick_delete_timer", "300"),
+    ("ban_delete_timer", "600"),
 ]
 
 
@@ -351,6 +382,11 @@ def init_db():
             conn.commit()
             logger.info("Migration: added 'verified' column to vouches table.")
 
+        if "is_sentiment" not in vouch_columns:
+            cursor.execute("ALTER TABLE vouches ADD COLUMN is_sentiment INTEGER DEFAULT 0")
+            conn.commit()
+            logger.info("Migration: added 'is_sentiment' column to vouches table.")
+
         # Users table migrations
         cursor.execute("PRAGMA table_info(users)")
         user_columns = [row[1] for row in cursor.fetchall()]
@@ -369,6 +405,34 @@ def init_db():
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}")
                 conn.commit()
                 logger.info(f"Migration: added '{col_name}' column to users table.")
+
+        # Clean up any non-iso datetimes in the SQLite database to prevent SQLAlchemy parsing errors
+        for col in ["last_seen", "first_seen"]:
+            try:
+                cursor.execute(f"SELECT id, {col} FROM users WHERE {col} IS NOT NULL")
+                rows = cursor.fetchall()
+                for r_id, val in rows:
+                    if not val:
+                        continue
+                    try:
+                        # Test standard parsing
+                        datetime.fromisoformat(val)
+                    except ValueError:
+                        # Try parsing fallback formats
+                        is_valid = False
+                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                            try:
+                                datetime.strptime(val, fmt)
+                                is_valid = True
+                                break
+                            except ValueError:
+                                continue
+                        if not is_valid:
+                            # Not a valid date format! Update it to NULL
+                            cursor.execute(f"UPDATE users SET {col} = NULL WHERE id = ?", (r_id,))
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"Self-healing check on {col} failed: {e}")
 
         conn.close()
     except Exception as e:
