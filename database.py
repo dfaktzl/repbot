@@ -26,8 +26,15 @@ logger = logging.getLogger(__name__)
 
 class SafeDateTime(TypeDecorator):
     """Custom DateTime type decorator that gracefully handles invalid date formats in SQLite."""
-    impl = DateTime
+    impl = String
     cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
 
     def process_result_value(self, value, dialect):
         if value is None:
@@ -48,6 +55,7 @@ class SafeDateTime(TypeDecorator):
                 logger.warning(f"Failed to parse datetime string: {value!r} - returning None")
                 return None
         return value
+
 
 Base = declarative_base()
 
