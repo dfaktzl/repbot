@@ -79,6 +79,7 @@ class User(Base):
     flag_reason = Column(String, nullable=True)
     is_sex_worker = Column(Integer, default=0)        # 0=Clean, 1=Sex Worker
     is_dangerous = Column(Integer, default=0)         # 0=Clean, 1=DANGEROUS
+    in_gatekeeper = Column(Integer, default=0)        # 0=Out, 1=In
 
     # Tracking
     first_seen = Column(SafeDateTime, default=lambda: datetime.now(timezone.utc))
@@ -407,6 +408,7 @@ def init_db():
             ("join_date", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ("status", "TEXT DEFAULT 'active'"),
             ("kick_count", "INTEGER DEFAULT 0"),
+            ("in_gatekeeper", "INTEGER DEFAULT 0"),
         ]
         for col_name, col_def in columns_to_check:
             if col_name not in user_columns:
