@@ -405,7 +405,7 @@ def init_db():
             ("is_verified", "INTEGER DEFAULT 0"),
             ("vouched_by", "INTEGER DEFAULT NULL"),
             ("vouch_count", "INTEGER DEFAULT 0"),
-            ("join_date", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ("join_date", "TIMESTAMP DEFAULT NULL"),
             ("status", "TEXT DEFAULT 'active'"),
             ("kick_count", "INTEGER DEFAULT 0"),
             ("in_gatekeeper", "INTEGER DEFAULT 0"),
