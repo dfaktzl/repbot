@@ -170,15 +170,27 @@ async def passive_user_listener(update: Update, context: ContextTypes.DEFAULT_TY
                         logger.info(f"Evicted user {user.id} from social group {SOCIAL_GROUP_ID} (not in gatekeeper channel).")
                         if LOG_CHANNEL:
                             try:
+                                from html import escape
+                                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                                fn = escape(user.first_name) if user.first_name else "Unknown"
+                                ln = escape(user.last_name) if user.last_name else "None"
+                                un = f"@{escape(user.username)}" if user.username else "None"
+                                
+                                log_msg = fix_surrogates(
+                                    f"🚪 <b>GATEKEEPER EVICTION</b>\n"
+                                    f"──────────────────────────\n"
+                                    f"👤 <b>First Name:</b> {fn}\n"
+                                    f"👤 <b>Last Name:</b> {ln}\n"
+                                    f"🏷️ <b>Username:</b> {un}\n"
+                                    f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
+                                    f"⏱️ <b>Time:</b> <code>{now_str}</code>\n"
+                                    f"──────────────────────────\n"
+                                    f"📋 <b>Action:</b> Instantly banned from Social Group\n"
+                                    f"ℹ️ <b>Reason:</b> Not a member of the mandatory gatekeeping channel."
+                                )
                                 await context.bot.send_message(
                                     chat_id=LOG_CHANNEL,
-                                    text=(
-                                        f"🚪 <b>GATEKEEPER EVICTION</b>\n"
-                                        f"──────────────────────────\n"
-                                        f"👤 <b>User:</b> <a href=\"tg://user?id={user.id}\">{safe_md(user.first_name)}</a> | @{user.username or 'No @'} (<code>{user.id}</code>)\n"
-                                        f"📋 <b>Action:</b> Instantly banned from Social Group\n"
-                                        f"ℹ️ <b>Reason:</b> Not a member of the mandatory gatekeeping channel."
-                                    ),
+                                    text=log_msg,
                                     parse_mode="HTML",
                                 )
                             except Exception as log_err:
@@ -296,10 +308,28 @@ async def passive_user_listener(update: Update, context: ContextTypes.DEFAULT_TY
 
         if LOG_CHANNEL:
             try:
+                from html import escape
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                fn = escape(user.first_name) if user.first_name else "Unknown"
+                ln = escape(user.last_name) if user.last_name else "None"
+                un = f"@{escape(user.username)}" if user.username else "None"
+                
+                log_msg = fix_surrogates(
+                    f"🚨 <b>AUTO-FLAG SCAMMER</b>\n"
+                    f"──────────────────────────\n"
+                    f"👤 <b>First Name:</b> {fn}\n"
+                    f"👤 <b>Last Name:</b> {ln}\n"
+                    f"🏷️ <b>Username:</b> {un}\n"
+                    f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
+                    f"⏱️ <b>Time:</b> <code>{now_str}</code>\n"
+                    f"──────────────────────────\n"
+                    f"📋 <b>Action:</b> Auto-Flagged as Scammer\n"
+                    f"ℹ️ <b>Reason:</b> Spam detected ({escape(scam_reason)})"
+                )
                 await context.bot.send_message(
                     chat_id=LOG_CHANNEL,
-                    text=f"🚨 **AUTO-FLAG**: `{user.id}` ({safe_md(user.first_name)}) — spam detected ({scam_reason}).",
-                    parse_mode="Markdown",
+                    text=log_msg,
+                    parse_mode="HTML",
                 )
             except Exception as e:
                 logger.warning(f"Failed to log auto-flag: {e}")
@@ -314,14 +344,28 @@ async def passive_user_listener(update: Update, context: ContextTypes.DEFAULT_TY
 
         if LOG_CHANNEL:
             try:
-                log_msg = (
-                    f"🍑 **SEX WORKER DETECTED**\n"
-                    f"👤 User: {safe_md(user.first_name)} (`{user.id}`)\n"
-                    f"📍 Group: {safe_md(cl)}\n"
-                    f"🔍 Trigger: `{sw_word}`"
+                from html import escape
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                fn = escape(user.first_name) if user.first_name else "Unknown"
+                ln = escape(user.last_name) if user.last_name else "None"
+                un = f"@{escape(user.username)}" if user.username else "None"
+                
+                log_msg = fix_surrogates(
+                    f"🍑 <b>SEX WORKER DETECTED</b>\n"
+                    f"──────────────────────────\n"
+                    f"👤 <b>First Name:</b> {fn}\n"
+                    f"👤 <b>Last Name:</b> {ln}\n"
+                    f"🏷️ <b>Username:</b> {un}\n"
+                    f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
+                    f"⏱️ <b>Time:</b> <code>{now_str}</code>\n"
+                    f"──────────────────────────\n"
+                    f"📍 <b>Group:</b> {escape(cl)}\n"
+                    f"🔍 <b>Trigger:</b> <code>{escape(sw_word)}</code>"
                 )
                 await context.bot.send_message(
-                    chat_id=LOG_CHANNEL, text=log_msg, parse_mode="Markdown",
+                    chat_id=LOG_CHANNEL,
+                    text=log_msg,
+                    parse_mode="HTML",
                 )
             except Exception as e:
                 logger.warning(f"Failed to log sex worker detection: {e}")

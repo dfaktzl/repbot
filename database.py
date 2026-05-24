@@ -217,6 +217,31 @@ class BotMessage(Base):
     variables = Column(String, nullable=True)  # Comma-separated list of available {vars}
 
 
+class NotificationSubscriber(Base):
+    """Tracks users subscribed to newsletter/significant event alerts (/notify)."""
+    __tablename__ = "notification_subscribers"
+    user_id = Column(BigInteger, primary_key=True)       # Telegram User ID (static)
+    username = Column(String, nullable=True)             # @username (can change)
+    first_name = Column(String, nullable=True)
+    subscribed_at = Column(SafeDateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<NotificationSubscriber(user_id={self.user_id}, username='{self.username}')>"
+
+
+class BlacklistUser(Base):
+    """Tracks permanently blacklisted/banned users."""
+    __tablename__ = "blacklist_users"
+    user_id = Column(BigInteger, primary_key=True)
+    username = Column(String, nullable=True)
+    reason = Column(String, nullable=True)
+    banned_by = Column(String, nullable=True)
+    banned_at = Column(SafeDateTime, default=lambda: datetime.now(timezone.utc))
+
+    def __repr__(self):
+        return f"<BlacklistUser(user_id={self.user_id}, username='{self.username}')>"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  DATABASE SETUP
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -297,8 +322,11 @@ _DEFAULT_MESSAGES = [
         "\u2022 2 vouches max per 24h \u2022 36h cooldown per user\n"
         "\u2022 48h minimum account age to vouch\n"
         "\u2022 All vouches **manually verified** by the mod team\n\n"
-        "\u26d4 **ZERO TOLERANCE** for illegal content.\n"
-        "Drug names, weapons, fraud = instant rejection + permanent ban.\n\n"
+        "\u26d4 **ZERO TOLERANCE FOR ILLEGAL/DRUG TERMS**\n"
+        "**You MUST NOT use drug names, illegal terminology, weapons, or fraud terms in your vouches!** "
+        "The system strictly prohibits them to ensure safety. **You gain absolutely nothing from adding illegal terms.** "
+        "Just saying _\"stuff was good, on time, would deal with again\"_ is **perfect and preferred**.\n"
+        "**Violations will trigger an instant vouch rejection + policy warning. Repeated violations will be reviewed by the mod team.**\n\n"
         "\u2139\ufe0f _Vouch Bot is an independent tool \u2014 not affiliated with any community._",
         "first_name, divider",
     ),
@@ -313,7 +341,8 @@ _DEFAULT_MESSAGES = [
         "**Vouching:** Reply with `+vouch` or `-vouch`\n"
         "**Lookup:** `/check @username` or `/check 123456789`\n\n"
         "\U0001f3db\ufe0f 45,000+ vouches (2020\u20132023) permanently stored.\n"
-        "\u26d4 **Illegal content is strictly prohibited.**\n"
+        "\u26d4 **ZERO TOLERANCE: Drug/illegal terms are strictly banned in vouches.** "
+        "Adding illegal terms provides absolutely no benefit. Keep comments clean: e.g., _\"on time, great deal, would deal with again\"_.\n"
         "Vouches are manually verified every 24\u201348hrs.\n"
         "_Vouch Bot is independent \u2014 your reputation is permanent._",
         "",
@@ -507,3 +536,63 @@ def set_bot_message(key: str, text: str) -> bool:
         row.text = text
         sess.commit()
         return True
+
+
+# ─── Subscription Helpers ──────────────────────────────────────────────────
+
+def add_notification_subscriber(user_id: int, username: str, first_name: str) -> bool:
+    """Add a user to the notification list. Returns True if successfully subscribed."""
+    with SessionLocal() as sess:
+        sub = sess.query(NotificationSubscriber).filter(NotificationSubscriber.user_id == user_id).first()
+        if sub:
+            sub.username = username
+            sub.first_name = first_name
+            sess.commit()
+            return False  # Already subscribed
+        sess.add(NotificationSubscriber(user_id=user_id, username=username, first_name=first_name))
+        sess.commit()
+        return True
+
+def remove_notification_subscriber(user_id: int) -> bool:
+    """Remove a user from the notification list. Returns True if successfully unsubscribed."""
+    with SessionLocal() as sess:
+        sub = sess.query(NotificationSubscriber).filter(NotificationSubscriber.user_id == user_id).first()
+        if sub:
+            sess.delete(sub)
+            sess.commit()
+            return True
+        return False
+
+def is_notification_subscribed(user_id: int) -> bool:
+    """Check if a user is subscribed to notifications."""
+    with SessionLocal() as sess:
+        sub = sess.query(NotificationSubscriber).filter(NotificationSubscriber.user_id == user_id).first()
+        return sub is not None
+
+def get_notification_subscribers() -> list[int]:
+    """Get all subscribed user IDs."""
+    with SessionLocal() as sess:
+        rows = sess.query(NotificationSubscriber.user_id).all()
+        return [r[0] for r in rows]
+
+
+# ─── Blacklist Helpers ───────────────────────────────────────────────────────
+
+def blacklist_user(user_id: int, username: str | None, reason: str, banned_by: str) -> None:
+    """Add or update a user on the permanent blacklist database."""
+    with SessionLocal() as sess:
+        row = sess.query(BlacklistUser).filter(BlacklistUser.user_id == user_id).first()
+        if not row:
+            sess.add(BlacklistUser(user_id=user_id, username=username, reason=reason, banned_by=banned_by))
+        else:
+            row.username = username
+            row.reason = reason
+            row.banned_by = banned_by
+        sess.commit()
+
+def is_blacklisted_user(user_id: int) -> bool:
+    """Check if a user ID is permanently blacklisted."""
+    with SessionLocal() as sess:
+        row = sess.query(BlacklistUser).filter(BlacklistUser.user_id == user_id).first()
+        return row is not None
+

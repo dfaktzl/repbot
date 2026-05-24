@@ -233,7 +233,6 @@ def rebuild_log_keyboard(vouch_id: int, recipient_id: int, include_verify: bool 
     if include_verify:
         row1.append(InlineKeyboardButton("✅ Verify Vouch", callback_data=f"admin_approve_vouch_{vouch_id}"))
     row1.extend([
-        InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
         InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
     ])
     keyboard = [
@@ -463,7 +462,6 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [
                     InlineKeyboardButton("✅ Verify Vouch", callback_data=f"admin_approve_vouch_{vouch_id}"),
-                    InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
                     InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
                 ],
                 [
@@ -473,13 +471,35 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            
+            from html import escape
+            # Voucher names
+            v_fn = escape(voucher_user.first_name) if voucher_user.first_name else "Unknown"
+            v_ln = escape(voucher_user.last_name) if voucher_user.last_name else "None"
+            v_un = f"@{escape(voucher_user.username)}" if voucher_user.username else "None"
+            
+            # Target names
+            r_fn = escape(recipient_tg.first_name) if recipient_tg.first_name else "Unknown"
+            r_ln = escape(recipient_tg.last_name) if getattr(recipient_tg, "last_name", None) else "None"
+            r_un = f"@{escape(recipient_tg.username)}" if getattr(recipient_tg, "username", None) else "None"
+
             log_msg = fix_surrogates(
                 f"🔔 <b>New Vouch</b> (ID: <code>{vouch_id}</code>)\n"
                 f"──────────────────────────\n"
-                f"👤 <b>Voucher:</b> <a href=\"tg://user?id={voucher_user.id}\">{safe_md(voucher_user.first_name)}</a> (<code>{voucher_user.id}</code>)\n"
-                f"🎯 <b>Target:</b> <a href=\"tg://user?id={recipient_tg.id}\">{safe_md(recipient_tg.first_name)}</a> (<code>{recipient_tg.id}</code>)\n"
+                f"👤 <b>Voucher First Name:</b> {v_fn}\n"
+                f"👤 <b>Voucher Last Name:</b> {v_ln}\n"
+                f"🏷️ <b>Voucher Username:</b> {v_un}\n"
+                f"🆔 <b>Voucher ID:</b> <code>{voucher_user.id}</code>\n"
+                f"──────────────────────────\n"
+                f"🎯 <b>Target First Name:</b> {r_fn}\n"
+                f"🎯 <b>Target Last Name:</b> {r_ln}\n"
+                f"🏷️ <b>Target Username:</b> {r_un}\n"
+                f"🆔 <b>Target ID:</b> <code>{recipient_tg.id}</code>\n"
+                f"──────────────────────────\n"
                 f"💎 <b>Value:</b> {icon} (<code>{value:+d}</code>)\n"
-                f"📝 <b>Comment:</b> <i>{safe_md(comment_text) or 'None'}</i>"
+                f"📝 <b>Comment:</b> <i>{escape(comment_text or '') or 'None'}</i>\n"
+                f"⏱️ <b>Time:</b> <code>{now_str}</code>"
             )
             await context.bot.send_message(
                 chat_id=LOG_CHANNEL,
@@ -616,7 +636,6 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
             keyboard = [
                 [
                     InlineKeyboardButton("✅ Verify Vouch", callback_data=f"admin_approve_vouch_{vouch_id}"),
-                    InlineKeyboardButton("🔄 Toggle Vouch", callback_data=f"admin_toggle_vouch_{vouch_id}"),
                     InlineKeyboardButton("🗑️ Delete Vouch", callback_data=f"admin_delete_vouch_{vouch_id}")
                 ],
                 [
@@ -626,14 +645,36 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            
+            from html import escape
+            # Voucher names
+            v_fn = escape(voucher_user.first_name) if voucher_user.first_name else "Unknown"
+            v_ln = escape(voucher_user.last_name) if voucher_user.last_name else "None"
+            v_un = f"@{escape(voucher_user.username)}" if voucher_user.username else "None"
+            
+            # Target names
+            r_fn = escape(recipient_tg.first_name) if recipient_tg.first_name else "Unknown"
+            r_ln = escape(recipient_tg.last_name) if getattr(recipient_tg, "last_name", None) else "None"
+            r_un = f"@{escape(recipient_tg.username)}" if getattr(recipient_tg, "username", None) else "None"
+
             log_msg = fix_surrogates(
                 f"🧠 <b>Sentiment Vouch Detected</b> (ID: <code>{vouch_id}</code>)\n"
                 f"──────────────────────────\n"
-                f"👤 <b>Voucher:</b> <a href=\"tg://user?id={voucher_user.id}\">{safe_md(voucher_user.first_name)}</a> (<code>{voucher_user.id}</code>)\n"
-                f"🎯 <b>Target:</b> <a href=\"tg://user?id={recipient_tg.id}\">{safe_md(recipient_tg.first_name)}</a> (<code>{recipient_tg.id}</code>)\n"
+                f"👤 <b>Voucher First Name:</b> {v_fn}\n"
+                f"👤 <b>Voucher Last Name:</b> {v_ln}\n"
+                f"🏷️ <b>Voucher Username:</b> {v_un}\n"
+                f"🆔 <b>Voucher ID:</b> <code>{voucher_user.id}</code>\n"
+                f"──────────────────────────\n"
+                f"🎯 <b>Target First Name:</b> {r_fn}\n"
+                f"🎯 <b>Target Last Name:</b> {r_ln}\n"
+                f"🏷️ <b>Target Username:</b> {r_un}\n"
+                f"🆔 <b>Target ID:</b> <code>{recipient_tg.id}</code>\n"
+                f"──────────────────────────\n"
                 f"💎 <b>Value:</b> {icon} (<code>{value:+d}</code>)\n"
                 f"📊 <b>Keywords:</b> <code>{pos} pos / {neg} neg</code>\n"
-                f"📝 <b>Message:</b> <i>{safe_md(text[:120])}</i>"
+                f"📝 <b>Message:</b> <i>{escape(text[:120])}</i>\n"
+                f"⏱️ <b>Time:</b> <code>{now_str}</code>"
             )
             await context.bot.send_message(
                 chat_id=LOG_CHANNEL,

@@ -181,16 +181,8 @@ async def check_blacklist(text: str, user, chat, context, session: Session, cons
         PolicyViolation.timestamp > cutoff,
     ).count()
 
-    # Auto-flag as SCAMMER if threshold reached
+    # Auto-flagging disabled to avoid banning users for accidental violations (vouching violations now act as warnings/strikes only)
     auto_flagged = False
-    if strike_count >= SCAMMER_STRIKE_LIMIT:
-        db_user = session.query(User).filter(User.id == uid).first()
-        if db_user and not db_user.is_flagged:
-            db_user.is_flagged = 1
-            db_user.flag_reason = (
-                f"AUTO-SCAMMER: {strike_count} policy violations in {SCAMMER_STRIKE_WINDOW}"
-            )
-            auto_flagged = True
 
     if console:
         from rich.panel import Panel
@@ -204,22 +196,36 @@ async def check_blacklist(text: str, user, chat, context, session: Session, cons
             title="🚫 Policy Violation", border_style="red",
         ))
 
-    log_text = (
-        f"🚫 **POLICY VIOLATION**\n"
-        f"👤 User: {safe_md(user.first_name)} (`{user.id}`)\n"
-        f"📍 Group: {safe_md(cl)}\n"
-        f"🔍 Term: `{safe_md(term)}`\n"
-        f"⚠️ Strike: {strike_count}/{SCAMMER_STRIKE_LIMIT}"
+    from datetime import datetime, timezone
+    from html import escape
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+    v_fn = escape(user.first_name) if user.first_name else "Unknown"
+    v_ln = escape(user.last_name) if getattr(user, "last_name", None) else "None"
+    v_un = f"@{escape(user.username)}" if getattr(user, "username", None) else "None"
+    
+    log_text = fix_surrogates(
+        f"🚫 <b>POLICY VIOLATION</b>\n"
+        f"──────────────────────────\n"
+        f"👤 <b>First Name:</b> {v_fn}\n"
+        f"👤 <b>Last Name:</b> {v_ln}\n"
+        f"🏷️ <b>Username:</b> {v_un}\n"
+        f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
+        f"⏱️ <b>Time:</b> <code>{now_str}</code>\n"
+        f"──────────────────────────\n"
+        f"📍 <b>Group:</b> {escape(cl)}\n"
+        f"🔍 <b>Term:</b> <code>{escape(term)}</code>\n"
+        f"⚠️ <b>Strike:</b> {strike_count}/{SCAMMER_STRIKE_LIMIT}"
     )
     if auto_flagged:
-        log_text += "\n\n🚨 **AUTO-FLAGGED AS SCAMMER** — User must contact admin for manual verification."
+        log_text += "\n──────────────────────────\n🚨 <b>AUTO-FLAGGED AS SCAMMER</b> — User must contact admin for manual verification."
 
     if LOG_CHANNEL and context:
         try:
             await context.bot.send_message(
                 chat_id=LOG_CHANNEL,
                 text=log_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         except Exception as e:
             logger.warning(f"Failed to log policy violation to channel: {e}")
@@ -243,8 +249,16 @@ def validate_vouch(
     """Validate a vouch attempt. Returns an error message string if invalid, None if OK.
     This is shared between explicit vouch and sentiment detection handlers."""
     from sqlalchemy import desc
-    from database import Vouch
-    from config import MIN_ACCOUNT_AGE_HOURS, DAILY_VOUCH_LIMIT, PER_USER_COOLDOWN_HOURS
+    from database import Vouch, get_setting
+    from config import MIN_ACCOUNT_AGE_HOURS as CONFIG_AGE_HOURS, DAILY_VOUCH_LIMIT as CONFIG_DAILY_LIMIT, PER_USER_COOLDOWN_HOURS as CONFIG_COOLDOWN_HOURS
+
+    db_age = get_setting("policy_min_account_age_hours")
+    db_limit = get_setting("policy_daily_vouch_limit")
+    db_cooldown = get_setting("policy_user_cooldown_hours")
+
+    min_account_age_hours = int(db_age) if (db_age and db_age.isdigit()) else CONFIG_AGE_HOURS
+    daily_vouch_limit = int(db_limit) if (db_limit and db_limit.isdigit()) else CONFIG_DAILY_LIMIT
+    per_user_cooldown_hours = int(db_cooldown) if (db_cooldown and db_cooldown.isdigit()) else CONFIG_COOLDOWN_HOURS
 
     # Self-vouch
     if voucher_user.id == recipient_tg.id:
@@ -273,8 +287,8 @@ def validate_vouch(
         if fs.tzinfo is None:
             fs = fs.replace(tzinfo=timezone.utc)
         age_hours = (datetime.now(timezone.utc) - fs).total_seconds() / 3600
-        if age_hours < MIN_ACCOUNT_AGE_HOURS:
-            remaining = int(MIN_ACCOUNT_AGE_HOURS - age_hours)
+        if age_hours < min_account_age_hours:
+            remaining = int(min_account_age_hours - age_hours)
             return (
                 f"⏳ New accounts must wait **{remaining}h** before vouching.\n"
                 f"This prevents spam and ensures trust."
@@ -288,8 +302,8 @@ def validate_vouch(
             Vouch.voucher_id == voucher_user.id,
             Vouch.timestamp > cutoff,
         ).count()
-        if daily_count >= DAILY_VOUCH_LIMIT:
-            return f"🚫 **Daily limit reached** ({DAILY_VOUCH_LIMIT} vouches per 24h)."
+        if daily_count >= daily_vouch_limit:
+            return f"🚫 **Daily limit reached** ({daily_vouch_limit} vouches per 24h)."
 
     # Per-user cooldown
     if not is_admin(voucher_user.id):
@@ -307,8 +321,8 @@ def validate_vouch(
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             hours_since = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-            if hours_since < PER_USER_COOLDOWN_HOURS:
-                remaining = int(PER_USER_COOLDOWN_HOURS - hours_since)
+            if hours_since < per_user_cooldown_hours:
+                remaining = int(per_user_cooldown_hours - hours_since)
                 return f"⏳ Wait **{remaining}h** before vouching for this user again."
 
     # Negative vouch requires reason

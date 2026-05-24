@@ -73,6 +73,7 @@ def main():
             BotCommand("vouch", "Vouch for a user with their ID or @username, or reply to someone's message"),
             BotCommand("negvouch", "Negative vouch a user with their ID or @username — reason required"),
             BotCommand("check", "Check a user's reputation and vouch history"),
+            BotCommand("notify", "Subscribe/unsubscribe to low-volume community alert newsletter"),
         ]
         await application.bot.set_my_commands(public_commands, scope=BotCommandScopeDefault())
 
@@ -88,6 +89,7 @@ def main():
             BotCommand("dbstats", "Database statistics"),
             BotCommand("dbstatsexport", "Export all vouches as .txt"),
             BotCommand("broadcast", "Broadcast a message to all users"),
+            BotCommand("sendnotify", "Dispatch community alert to all subscribed users"),
             BotCommand("noweb", "Shut down the web dashboard"),
             BotCommand("webactive", "Start the web dashboard"),
         ]
@@ -123,6 +125,8 @@ def main():
         cmd_help,
         cmd_mydata,
         cmd_start,
+        cmd_notify,
+        notify_callback,
     )
     from handlers.vouching import handle_sentiment_vouch, handle_vouch, admin_log_callback
     from handlers.admin import (
@@ -139,6 +143,8 @@ def main():
         panel_callback,
         cmd_noweb,
         cmd_webactive,
+        cmd_sendnotify,
+        sendnotify_callback,
     )
     from handlers.admin_panel import (
         admin_input_handler,
@@ -147,14 +153,25 @@ def main():
     )
     from handlers.passive import passive_user_listener
     from handlers.welcome import handle_welcome, handle_user_join
+    from handlers.adminhelp import (
+        cmd_help_vouchbot,
+        cmd_admin_vouchbot,
+        handle_user_dm_support,
+        handle_admin_reply_support,
+        handle_discussion_forward_support,
+    )
 
     # ── User commands ──
     app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("help",   cmd_help))
+    app.add_handler(CommandHandler("help",   cmd_help_vouchbot))
+    app.add_handler(CommandHandler("support", cmd_help_vouchbot))
+    app.add_handler(CommandHandler("supporthelp", cmd_help_vouchbot))
     app.add_handler(CommandHandler("check",  cmd_check))
     app.add_handler(CommandHandler("vouch",  handle_vouch))
     app.add_handler(CommandHandler("negvouch", handle_vouch))
     app.add_handler(CommandHandler("mydata", cmd_mydata))
+    app.add_handler(CommandHandler("notify", cmd_notify))
+    app.add_handler(CommandHandler("admin", cmd_admin_vouchbot))
 
     # ── Admin commands ──
     app.add_handler(CommandHandler("deletevouch",   cmd_delete_vouch))
@@ -167,6 +184,7 @@ def main():
     app.add_handler(CommandHandler("forcevouch",    cmd_force_vouch))
     app.add_handler(CommandHandler("dangerous",     cmd_dangerous))
     app.add_handler(CommandHandler("broadcast",     cmd_broadcast))
+    app.add_handler(CommandHandler("sendnotify",    cmd_sendnotify))
     app.add_handler(CommandHandler("noweb",         cmd_noweb))
     app.add_handler(CommandHandler("weboff",        cmd_noweb))
     app.add_handler(CommandHandler("webactive",     cmd_webactive))
@@ -175,8 +193,10 @@ def main():
     app.add_handler(CallbackQueryHandler(panel_nav_callback,          pattern=r"^ap_"))
     app.add_handler(CallbackQueryHandler(panel_callback,              pattern=r"^v_"))
     app.add_handler(CallbackQueryHandler(broadcast_callback,          pattern=r"^bc_"))
+    app.add_handler(CallbackQueryHandler(sendnotify_callback,         pattern=r"^sn_"))
     app.add_handler(CallbackQueryHandler(check_legacy_page_callback,  pattern=r"^chkl_"))
     app.add_handler(CallbackQueryHandler(check_page_callback,         pattern=r"^chk_"))
+    app.add_handler(CallbackQueryHandler(notify_callback,             pattern=r"^notify_"))
     app.add_handler(CallbackQueryHandler(admin_log_callback,          pattern=r"^admin_(approve_vouch|toggle_vouch|delete_vouch|flag_user|unflag_user)_"))
 
     # ── Vouch triggers: explicit +/-vouch/rep/1, spaced variants, and bare 'vouch'/'rep' in replies ──
@@ -202,12 +222,13 @@ def main():
         group=2,
     )
 
-    # ── Welcome when added to group / when user joins ──
-    app.add_handler(ChatMemberHandler(handle_welcome, ChatMemberHandler.MY_CHAT_MEMBER))
-    app.add_handler(ChatMemberHandler(handle_user_join, ChatMemberHandler.CHAT_MEMBER))
-
     # ── Passive listener ──
     app.add_handler(TypeHandler(Update, passive_user_listener), group=1)
+
+    # ── Admin help & support system middleman & router ──
+    app.add_handler(MessageHandler(filters.REPLY & (~filters.ChatType.PRIVATE), handle_admin_reply_support), group=3)
+    app.add_handler(MessageHandler((~filters.COMMAND) & filters.ChatType.PRIVATE, handle_user_dm_support), group=4)
+    app.add_handler(MessageHandler(filters.FORWARDED & (~filters.ChatType.PRIVATE), handle_discussion_forward_support), group=5)
 
     console.print("[bold yellow]🤖 Bot v3.2 starting (Production Build)...[/bold yellow]")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

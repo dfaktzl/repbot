@@ -64,8 +64,11 @@ async def handle_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• 48h minimum account age to vouch\n"
             "• All vouches manually verified by the mod team\n\n"
 
-            "⛔️ **ZERO TOLERANCE for illegal content.**\n"
-            "Drug names, weapons, fraud = instant rejection + permanent ban.\n\n"
+            "⛔️ **ZERO TOLERANCE FOR ILLEGAL/DRUG TERMS**\n"
+            "**You MUST NOT use drug names, illegal terminology, weapons, or fraud terms in your vouches!** "
+            "To keep the system completely safe, they are strictly prohibited. **You gain absolutely nothing from adding drug or illegal terms.** "
+            "Just saying _\"stuff was good, on time, would deal with again\"_ is **perfect and preferred**.\n"
+            "**Violations will result in an instant vouch rejection + warning. Repeated violations will be reviewed by the mod team.**\n\n"
 
             "ℹ️ _Vouch Bot is an independent tool — not affiliated with any community or group._"
         )

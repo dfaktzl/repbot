@@ -15,10 +15,26 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from config import LOG_CHANNEL, PANEL_PAGE_SIZE
-from database import OldVouch, SessionLocal, User, Vouch, get_session
+from database import OldVouch, SessionLocal, User, Vouch, get_session, get_notification_subscribers, blacklist_user, get_setting
 from helpers import fix_surrogates, is_admin, safe_md
 
 logger = logging.getLogger(__name__)
+
+
+async def execute_ban_shield(user_id: int, bot):
+    """Eject and ban blacklisted user from social and main chats."""
+    white_id_str = get_setting("white_channel_id")
+    black_id_str = get_setting("black_channel_id")
+    
+    for cid_str in (white_id_str, black_id_str):
+        if cid_str:
+            cleaned = cid_str.strip()
+            if cleaned.isdigit() or (cleaned.startswith("-") and cleaned[1:].isdigit()):
+                try:
+                    await bot.ban_chat_member(chat_id=int(cleaned), user_id=user_id)
+                    logger.info(f"Ban shield automatically ejected and banned user {user_id} from chat {cleaned}")
+                except Exception as ban_err:
+                    logger.warning(f"Ban shield could not ban user {user_id} from chat {cleaned}: {ban_err}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -155,11 +171,25 @@ async def cmd_scammer(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Try fetching real-time Telegram details to keep database records updated
+        try:
+            target_tg = await context.bot.get_chat(target_id)
+            if target_tg:
+                db_user.first_name = target_tg.first_name or db_user.first_name
+                db_user.last_name = target_tg.last_name or db_user.last_name
+                db_user.username = target_tg.username or db_user.username
+        except Exception:
+            pass
+
         flag_reason = f"Admin ({admin.first_name}): {reason}"
         db_user.is_flagged = 1
         db_user.flag_reason = flag_reason
         target_name = db_user.first_name or target_name
         uname_str = f"@{db_user.username}" if db_user.username else "No @"
+
+        # Blacklist user persistently and trigger automated ban shield
+        blacklist_user(target_id, db_user.username, reason, admin.first_name)
+        await execute_ban_shield(target_id, context.bot)
 
         result = (
             f"🚩 **SCAMMER FLAGGED**\n\n"
@@ -183,8 +213,29 @@ async def cmd_scammer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if LOG_CHANNEL:
             try:
+                from html import escape
+                from datetime import datetime, timezone
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                fn = escape(db_user.first_name) if db_user.first_name else "Unknown"
+                ln = escape(db_user.last_name) if db_user.last_name else "None"
+                un = f"@{escape(db_user.username)}" if db_user.username else "None"
+
+                log_msg = fix_surrogates(
+                    f"🚩 <b>SCAMMER FLAGGED</b>\n"
+                    f"──────────────────────────\n"
+                    f"👤 <b>First Name:</b> {fn}\n"
+                    f"👤 <b>Last Name:</b> {ln}\n"
+                    f"🏷️ <b>Username:</b> {un}\n"
+                    f"🆔 <b>User ID:</b> <code>{db_user.id}</code>\n"
+                    f"⏱️ <b>Time:</b> <code>{now_str}</code>\n"
+                    f"──────────────────────────\n"
+                    f"📝 <b>Reason:</b> <code>{escape(reason)}</code>\n"
+                    f"👮 <b>By Admin:</b> {escape(admin.first_name)} (ID: {admin.id})\n\n"
+                    f"ℹ️ This user can no longer vouch or receive vouches."
+                )
                 await context.bot.send_message(
-                    chat_id=LOG_CHANNEL, text=result, parse_mode="Markdown",
+                    chat_id=LOG_CHANNEL, text=log_msg, parse_mode="HTML",
                 )
             except Exception as e:
                 logger.warning(f"Failed to log scammer flag: {e}")
@@ -222,13 +273,31 @@ async def cmd_delete_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if recipient:
                     recipient.vouches -= vouch.value
 
-        log_info = (
-            f"🗑️ **Vouch Deleted (Admin)**\n"
-            f"🆔 Vouch ID: `{vouch.id}`\n"
-            f"👤 Voucher: `{vouch.voucher_id}`\n"
-            f"🎯 Recipient: `{vouch.recipient_id}`\n"
-            f"📝 Content: {safe_md(vouch.message_content)}"
-        )
+        # Get DB users for voucher and recipient
+        voucher_user = session.query(User).filter(User.id == vouch.voucher_id).first()
+        recipient_user = session.query(User).filter(User.id == vouch.recipient_id).first()
+
+        # Try fetching real-time Telegram details for voucher
+        if voucher_user:
+            try:
+                v_tg = await context.bot.get_chat(vouch.voucher_id)
+                if v_tg:
+                    voucher_user.first_name = v_tg.first_name or voucher_user.first_name
+                    voucher_user.last_name = v_tg.last_name or voucher_user.last_name
+                    voucher_user.username = v_tg.username or voucher_user.username
+            except Exception:
+                pass
+
+        # Try fetching real-time Telegram details for recipient
+        if recipient_user:
+            try:
+                r_tg = await context.bot.get_chat(vouch.recipient_id)
+                if r_tg:
+                    recipient_user.first_name = r_tg.first_name or recipient_user.first_name
+                    recipient_user.last_name = r_tg.last_name or recipient_user.last_name
+                    recipient_user.username = r_tg.username or recipient_user.username
+            except Exception:
+                pass
 
         session.delete(vouch)
         await update.message.reply_text(f"✅ Vouch `{vouch_id}` deleted, score reverted.", parse_mode="Markdown")
@@ -237,7 +306,39 @@ async def cmd_delete_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if LOG_CHANNEL:
             try:
-                await context.bot.send_message(chat_id=LOG_CHANNEL, text=log_info, parse_mode="Markdown")
+                from html import escape
+                from datetime import datetime, timezone
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                v_fn = escape(voucher_user.first_name) if (voucher_user and voucher_user.first_name) else "Unknown"
+                v_ln = escape(voucher_user.last_name) if (voucher_user and voucher_user.last_name) else "None"
+                v_un = f"@{escape(voucher_user.username)}" if (voucher_user and voucher_user.username) else "None"
+                v_id = vouch.voucher_id
+
+                r_fn = escape(recipient_user.first_name) if (recipient_user and recipient_user.first_name) else "Unknown"
+                r_ln = escape(recipient_user.last_name) if (recipient_user and recipient_user.last_name) else "None"
+                r_un = f"@{escape(recipient_user.username)}" if (recipient_user and recipient_user.username) else "None"
+                r_id = vouch.recipient_id
+
+                log_html = fix_surrogates(
+                    f"🗑️ <b>Vouch Deleted (Admin)</b>\n"
+                    f"──────────────────────────\n"
+                    f"👤 <b>Voucher First Name:</b> {v_fn}\n"
+                    f"👤 <b>Voucher Last Name:</b> {v_ln}\n"
+                    f"🏷️ <b>Voucher Username:</b> {v_un}\n"
+                    f"🆔 <b>Voucher ID:</b> <code>{v_id}</code>\n"
+                    f"──────────────────────────\n"
+                    f"🎯 <b>Target First Name:</b> {r_fn}\n"
+                    f"🎯 <b>Target Last Name:</b> {r_ln}\n"
+                    f"🏷️ <b>Target Username:</b> {r_un}\n"
+                    f"🆔 <b>Target ID:</b> <code>{r_id}</code>\n"
+                    f"──────────────────────────\n"
+                    f"🆔 <b>Vouch ID:</b> <code>{vouch.id}</code>\n"
+                    f"📝 <b>Comment:</b> <i>{escape(vouch.message_content or '') or 'None'}</i>\n"
+                    f"👮 <b>Deleted By Admin:</b> {escape(update.effective_user.first_name)} (ID: {update.effective_user.id})\n"
+                    f"⏱️ <b>Time:</b> <code>{now_str}</code>"
+                )
+                await context.bot.send_message(chat_id=LOG_CHANNEL, text=log_html, parse_mode="HTML")
             except Exception as e:
                 logger.warning(f"Failed to log vouch deletion: {e}")
 
@@ -299,6 +400,26 @@ async def cmd_force_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             session.add(recipient)
 
+        # Try fetching real-time Telegram details for voucher
+        try:
+            v_tg = await context.bot.get_chat(voucher_id)
+            if v_tg:
+                voucher.first_name = v_tg.first_name or voucher.first_name
+                voucher.last_name = v_tg.last_name or voucher.last_name
+                voucher.username = v_tg.username or voucher.username
+        except Exception:
+            pass
+
+        # Try fetching real-time Telegram details for recipient
+        try:
+            r_tg = await context.bot.get_chat(recipient_id)
+            if r_tg:
+                recipient.first_name = r_tg.first_name or recipient.first_name
+                recipient.last_name = r_tg.last_name or recipient.last_name
+                recipient.username = r_tg.username or recipient.username
+        except Exception:
+            pass
+
         session.flush()
 
         new_vouch = Vouch(
@@ -323,8 +444,40 @@ async def cmd_force_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if LOG_CHANNEL:
             try:
+                from html import escape
+                from datetime import datetime, timezone
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                v_fn = escape(voucher.first_name) if voucher.first_name else "Unknown"
+                v_ln = escape(voucher.last_name) if voucher.last_name else "None"
+                v_un = f"@{escape(voucher.username)}" if voucher.username else "None"
+
+                r_fn = escape(recipient.first_name) if recipient.first_name else "Unknown"
+                r_ln = escape(recipient.last_name) if recipient.last_name else "None"
+                r_un = f"@{escape(recipient.username)}" if recipient.username else "None"
+
+                icon = "✅" if value > 0 else "❌"
+
+                log_html = fix_surrogates(
+                    f"👮 <b>ADMIN FORCE VOUCH ADDED</b>\n"
+                    f"──────────────────────────\n"
+                    f"👤 <b>Voucher First Name:</b> {v_fn}\n"
+                    f"👤 <b>Voucher Last Name:</b> {v_ln}\n"
+                    f"🏷️ <b>Voucher Username:</b> {v_un}\n"
+                    f"🆔 <b>Voucher ID:</b> <code>{voucher.id}</code>\n"
+                    f"──────────────────────────\n"
+                    f"🎯 <b>Target First Name:</b> {r_fn}\n"
+                    f"🎯 <b>Target Last Name:</b> {r_ln}\n"
+                    f"🏷️ <b>Target Username:</b> {r_un}\n"
+                    f"🆔 <b>Target ID:</b> <code>{recipient.id}</code>\n"
+                    f"──────────────────────────\n"
+                    f"💎 <b>Value:</b> {icon} (<code>{value:+d}</code>)\n"
+                    f"📝 <b>Comment:</b> <i>{escape(comment or '') or 'None'}</i>\n"
+                    f"👮 <b>By Admin:</b> {escape(update.effective_user.first_name)} (ID: {update.effective_user.id})\n"
+                    f"⏱️ <b>Time:</b> <code>{now_str}</code>"
+                )
                 await context.bot.send_message(
-                    chat_id=LOG_CHANNEL, text=f"👮 **ADMIN FORCE VOUCH**\n{msg}", parse_mode="Markdown"
+                    chat_id=LOG_CHANNEL, text=log_html, parse_mode="HTML"
                 )
             except Exception as e:
                 logger.warning(f"Failed to log force vouch: {e}")
@@ -361,12 +514,27 @@ async def cmd_dangerous(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             session.add(user)
 
+        # Try fetching real-time Telegram details
+        try:
+            target_tg = await context.bot.get_chat(user_id)
+            if target_tg:
+                user.first_name = target_tg.first_name or user.first_name
+                user.last_name = target_tg.last_name or user.last_name
+                user.username = target_tg.username or user.username
+        except Exception:
+            pass
+
         user.is_dangerous = 1
         user.flag_reason = f"DANGEROUS: {reason}"
 
+        # Blacklist user persistently and trigger automated ban shield
+        blacklist_user(user_id, user.username, f"DANGEROUS: {reason}", update.effective_user.first_name)
+        await execute_ban_shield(user_id, context.bot)
+
+        username_str = f" (@{user.username})" if user.username else " (No @)"
         msg = (
             f"🚫 **DANGEROUS USER FLAGGED**\n"
-            f"User: `{user_id}`\n"
+            f"User: `{user_id}`{username_str}\n"
             f"Reason: `{safe_md(reason)}`\n"
             f"Action: Profile locked and marked as Dangerous/Avoid."
         )
@@ -374,8 +542,29 @@ async def cmd_dangerous(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if LOG_CHANNEL:
             try:
+                from html import escape
+                from datetime import datetime, timezone
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                fn = escape(user.first_name) if user.first_name else "Unknown"
+                ln = escape(user.last_name) if user.last_name else "None"
+                un = f"@{escape(user.username)}" if user.username else "None"
+
+                log_html = fix_surrogates(
+                    f"🚫 <b>DANGEROUS USER FLAGGED</b>\n"
+                    f"──────────────────────────\n"
+                    f"👤 <b>First Name:</b> {fn}\n"
+                    f"👤 <b>Last Name:</b> {ln}\n"
+                    f"🏷️ <b>Username:</b> {un}\n"
+                    f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
+                    f"⏱️ <b>Time:</b> <code>{now_str}</code>\n"
+                    f"──────────────────────────\n"
+                    f"📝 <b>Reason:</b> <code>{escape(reason)}</code>\n"
+                    f"👮 <b>By Admin:</b> {escape(update.effective_user.first_name)} (ID: {update.effective_user.id})\n\n"
+                    f"ℹ️ Profile locked and marked as Dangerous/Avoid."
+                )
                 await context.bot.send_message(
-                    chat_id=LOG_CHANNEL, text=f"👮 **ADMIN DANGEROUS FLAG**\n{msg}", parse_mode="Markdown"
+                    chat_id=LOG_CHANNEL, text=log_html, parse_mode="HTML"
                 )
             except Exception as e:
                 logger.warning(f"Failed to log dangerous flag: {e}")
@@ -652,6 +841,39 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         admin_name = query.from_user.first_name
 
+        # Store attributes before possible deletion
+        v_id = vouch.id
+        v_content = vouch.message_content
+        v_val = vouch.value
+        v_voucher_id = vouch.voucher_id
+        v_recipient_id = vouch.recipient_id
+
+        # Get DB users for voucher and recipient
+        voucher_user = session.query(User).filter(User.id == v_voucher_id).first()
+        recipient_user = session.query(User).filter(User.id == v_recipient_id).first()
+
+        # Try fetching real-time Telegram details for voucher
+        if voucher_user:
+            try:
+                v_tg = await context.bot.get_chat(v_voucher_id)
+                if v_tg:
+                    voucher_user.first_name = v_tg.first_name or voucher_user.first_name
+                    voucher_user.last_name = v_tg.last_name or voucher_user.last_name
+                    voucher_user.username = v_tg.username or voucher_user.username
+            except Exception:
+                pass
+
+        # Try fetching real-time Telegram details for recipient
+        if recipient_user:
+            try:
+                r_tg = await context.bot.get_chat(v_recipient_id)
+                if r_tg:
+                    recipient_user.first_name = r_tg.first_name or recipient_user.first_name
+                    recipient_user.last_name = r_tg.last_name or recipient_user.last_name
+                    recipient_user.username = r_tg.username or recipient_user.username
+            except Exception:
+                pass
+
         if action == "v_approve":
             if vouch.verified == 0:
                 if vouch.is_sentiment:
@@ -697,8 +919,42 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if LOG_CHANNEL:
             try:
+                from html import escape
+                from datetime import datetime, timezone
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                v_fn = escape(voucher_user.first_name) if (voucher_user and voucher_user.first_name) else "Unknown"
+                v_ln = escape(voucher_user.last_name) if (voucher_user and voucher_user.last_name) else "None"
+                v_un = f"@{escape(voucher_user.username)}" if (voucher_user and voucher_user.username) else "None"
+
+                r_fn = escape(recipient_user.first_name) if (recipient_user and recipient_user.first_name) else "Unknown"
+                r_ln = escape(recipient_user.last_name) if (recipient_user and recipient_user.last_name) else "None"
+                r_un = f"@{escape(recipient_user.username)}" if (recipient_user and recipient_user.username) else "None"
+
+                action_emoji = "✅" if action == "v_approve" else ("❌" if action == "v_reject" else "🗑️")
+                action_text = "Vouch Approved" if action == "v_approve" else ("Vouch Rejected" if action == "v_reject" else "Vouch Deleted")
+
+                log_html = fix_surrogates(
+                    f"{action_emoji} <b>MODERATION: {action_text.upper()}</b>\n"
+                    f"──────────────────────────\n"
+                    f"👤 <b>Voucher First Name:</b> {v_fn}\n"
+                    f"👤 <b>Voucher Last Name:</b> {v_ln}\n"
+                    f"🏷️ <b>Voucher Username:</b> {v_un}\n"
+                    f"🆔 <b>Voucher ID:</b> <code>{v_voucher_id}</code>\n"
+                    f"──────────────────────────\n"
+                    f"🎯 <b>Target First Name:</b> {r_fn}\n"
+                    f"🎯 <b>Target Last Name:</b> {r_ln}\n"
+                    f"🏷️ <b>Target Username:</b> {r_un}\n"
+                    f"🆔 <b>Target ID:</b> <code>{v_recipient_id}</code>\n"
+                    f"──────────────────────────\n"
+                    f"🆔 <b>Vouch ID:</b> <code>{v_id}</code>\n"
+                    f"💎 <b>Value:</b> <code>{v_val:+d}</code>\n"
+                    f"📝 <b>Comment:</b> <i>{escape(v_content or '') or 'None'}</i>\n"
+                    f"👮 <b>Moderated By:</b> {escape(admin_name)} (ID: {query.from_user.id})\n"
+                    f"⏱️ <b>Time:</b> <code>{now_str}</code>"
+                )
                 await context.bot.send_message(
-                    chat_id=LOG_CHANNEL, text=f"🛡️ **MODERATION**: {result}", parse_mode="Markdown",
+                    chat_id=LOG_CHANNEL, text=log_html, parse_mode="HTML",
                 )
             except Exception as e:
                 logger.warning(f"Failed to log panel action: {e}")
@@ -819,6 +1075,159 @@ async def _broadcast_task(bot, user_ids, message, admin_chat_id):
         )
     except Exception:
         pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  /sendnotify (with confirmation)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def cmd_sendnotify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to send a significant event alert to all subscribed users."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    message = None
+    if update.message.reply_to_message:
+        message = update.message.reply_to_message.text_markdown
+    elif context.args:
+        message = " ".join(context.args)
+
+    if not message:
+        await update.message.reply_text(
+            "Usage:\n`/sendnotify <message>`\nOR reply `/sendnotify` to a message.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Fetch subscribed user IDs
+    user_ids = get_notification_subscribers()
+    count = len(user_ids)
+    if count == 0:
+        await update.message.reply_text("❌ No subscribed users found in the database. (Users can subscribe via DM using `/notify`).")
+        return
+
+    # Store notification broadcast data for confirmation
+    context.bot_data["pending_sendnotify"] = {
+        "user_ids": user_ids,
+        "message": message,
+        "admin_chat_id": update.effective_chat.id,
+    }
+
+    preview = message[:200] + ("..." if len(message) > 200 else "")
+    await update.message.reply_text(
+        f"🔔 **Alert Broadcast Preview**\n\n"
+        f"📨 **Subscribers:** `{count}` users\n\n"
+        f"💬 **Message:**\n{preview}\n\n"
+        f"_Press Confirm to alert all subscribed users, or Cancel to abort._",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Confirm", callback_data="sn_confirm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="sn_cancel"),
+        ]]),
+    )
+
+
+async def sendnotify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle sendnotify confirmation/cancellation."""
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("⛔ Admins only.", show_alert=True)
+        return
+
+    await query.answer()
+
+    pending = context.bot_data.pop("pending_sendnotify", None)
+    if not pending:
+        await query.message.edit_text("❌ No pending alert found.")
+        return
+
+    if query.data == "sn_cancel":
+        await query.message.edit_text("❌ Alert broadcast cancelled.")
+        return
+
+    if query.data == "sn_confirm":
+        user_ids = pending["user_ids"]
+        message = pending["message"]
+        admin_chat_id = pending["admin_chat_id"]
+        count = len(user_ids)
+
+        admin_id = query.from_user.id
+        admin_username = query.from_user.username
+        admin_first_name = query.from_user.first_name
+
+        await query.message.edit_text(f"📣 Alerting **{count}** subscribed users...")
+        asyncio.create_task(_sendnotify_task(
+            context.application.bot, user_ids, message, admin_chat_id,
+            admin_id, admin_username, admin_first_name
+        ))
+
+
+async def _sendnotify_task(bot, user_ids, message, admin_chat_id, admin_id, admin_username, admin_first_name):
+    sent = 0
+    failed = 0
+    total = len(user_ids)
+    start = datetime.now()
+
+    # Prepend dynamic header so users know it's a notification newsletter alert
+    full_alert = (
+        f"🚨 **COMMUNITY ALERT / ANNOUNCEMENT**\n"
+        f"──────────────────────────\n\n"
+        f"{message}\n\n"
+        f"──────────────────────────\n"
+        f"🔕 _To unsubscribe from these alerts at any time, run /notify in DM._"
+    )
+
+    for i, uid in enumerate(user_ids):
+        try:
+            await bot.send_message(chat_id=uid, text=full_alert, parse_mode="Markdown")
+            sent += 1
+        except Exception:
+            failed += 1
+
+        if i % 20 == 19:
+            await asyncio.sleep(1.0)
+
+    duration = datetime.now() - start
+    try:
+        await bot.send_message(
+            chat_id=admin_chat_id,
+            text=fix_surrogates(
+                f"📢 **Alert Dispatch Complete**\n"
+                f"Total subscribers: `{total}`\n"
+                f"✅ Sent: `{sent}`\n"
+                f"❌ Failed: `{failed}`\n"
+                f"⏱ Time: `{duration}`"
+            ),
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+    # Send log update to LOG_CHANNEL
+    if LOG_CHANNEL:
+        try:
+            from html import escape
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+            a_fn = escape(admin_first_name) if admin_first_name else "Unknown"
+            a_un = f"@{escape(admin_username)}" if admin_username else "None"
+
+            log_html = fix_surrogates(
+                f"📢 <b>NEWSLETTER: ALERT DISPATCHED</b>\n"
+                f"──────────────────────────\n"
+                f"👮 <b>Admin First Name:</b> {a_fn}\n"
+                f"🏷️ <b>Admin Username:</b> {a_un}\n"
+                f"🆔 <b>Admin ID:</b> <code>{admin_id}</code>\n"
+                f"──────────────────────────\n"
+                f"📨 <b>Total Subscribers:</b> <code>{total}</code>\n"
+                f"✅ <b>Sent:</b> <code>{sent}</code>\n"
+                f"❌ <b>Failed:</b> <code>{failed}</code>\n"
+                f"⏱️ <b>Dispatch Duration:</b> <code>{duration}</code>\n"
+                f"⏱️ <b>Time:</b> <code>{now_str}</code>"
+            )
+            await bot.send_message(chat_id=LOG_CHANNEL, text=log_html, parse_mode="HTML")
+        except Exception as log_err:
+            logger.warning(f"Failed to log alert dispatch to channel: {log_err}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

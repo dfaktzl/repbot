@@ -13,8 +13,11 @@ from sqlalchemy.orm import joinedload
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from config import GATEKEEPER_DB_PATH
-from database import OldVouch, SessionLocal, User, Vouch, get_bot_message, get_session
+from config import GATEKEEPER_DB_PATH, LOG_CHANNEL
+from database import (
+    OldVouch, SessionLocal, User, Vouch, get_bot_message, get_session,
+    add_notification_subscriber, remove_notification_subscriber, is_notification_subscribed
+)
 from helpers import fix_surrogates, safe_md
 
 
@@ -431,3 +434,128 @@ async def cmd_mydata(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="📂 **Your Data Export**\nAll data linked to your User ID.",
             parse_mode="Markdown",
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  /notify
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def cmd_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User command to subscribe or unsubscribe from alerts and newsletters."""
+    # Ensure it's inside private DM
+    if update.effective_chat.type != "private":
+        await update.message.reply_text(
+            "ℹ️ **DM Only Command**\n\n"
+            "Please message the bot directly in DM to manage your alert notifications.",
+            parse_mode="Markdown"
+        )
+        return
+
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    first_name = update.effective_user.first_name
+
+    # Handle quick command arguments if any (e.g. /notify unsubscribe or /notify off)
+    if context.args:
+        arg = context.args[0].lower().strip()
+        if arg in ("unsubscribe", "off", "stop", "unsub"):
+            removed = remove_notification_subscriber(user_id)
+            if removed:
+                await update.message.reply_text("🔕 **You have unsubscribed from community alerts.**\nYou will no longer receive significant event notifications.", parse_mode="Markdown")
+                await _log_subscription_event(context.bot, user_id, username, first_name, False)
+            else:
+                await update.message.reply_text("ℹ️ You were not subscribed to community alerts.", parse_mode="Markdown")
+            return
+        elif arg in ("subscribe", "on", "start", "sub"):
+            added = add_notification_subscriber(user_id, username, first_name)
+            if added:
+                await update.message.reply_text("🔔 **You are now subscribed to community alerts!**\nYou will receive a quiet notification when significant events occur.", parse_mode="Markdown")
+                await _log_subscription_event(context.bot, user_id, username, first_name, True)
+            else:
+                await update.message.reply_text("ℹ️ You are already subscribed to community alerts.", parse_mode="Markdown")
+            return
+
+    # No arguments, show the beautiful interactive menu
+    subscribed = is_notification_subscribed(user_id)
+    status_text = "🔔 **SUBSCRIBED**" if subscribed else "🔕 **NOT SUBSCRIBED**"
+    
+    text = (
+        f"📣 **Community Alerts & Newsletter**\n"
+        f"──────────────────────────\n"
+        f"Subscribe to receive a very small, quiet newsletter and instant alerts "
+        f"every time a significant community event occurs (e.g., a rolling/bashing, a major exit scam, or critical reputation sweeps).\n\n"
+        f"📋 **Current Status:** {status_text}\n\n"
+        f"Click the button below to toggle your subscription instantly."
+    )
+
+    button_text = "🔕 Unsubscribe" if subscribed else "🔔 Subscribe"
+    callback_action = "notify_unsub" if subscribed else "notify_sub"
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(button_text, callback_data=callback_action)]])
+
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+async def notify_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle interactive click events on the subscription toggle buttons."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    username = query.from_user.username
+    first_name = query.from_user.first_name
+
+    data = query.data
+    if data == "notify_sub":
+        add_notification_subscriber(user_id, username, first_name)
+        status_text = "🔔 **SUBSCRIBED**"
+        button_text = "🔕 Unsubscribe"
+        callback_action = "notify_unsub"
+        await _log_subscription_event(context.bot, user_id, username, first_name, True)
+    elif data == "notify_unsub":
+        remove_notification_subscriber(user_id)
+        status_text = "🔕 **NOT SUBSCRIBED**"
+        button_text = "🔔 Subscribe"
+        callback_action = "notify_sub"
+        await _log_subscription_event(context.bot, user_id, username, first_name, False)
+    else:
+        return
+
+    text = (
+        f"📣 **Community Alerts & Newsletter**\n"
+        f"──────────────────────────\n"
+        f"Subscribe to receive a very small, quiet newsletter and instant alerts "
+        f"every time a significant community event occurs (e.g., a rolling/bashing, a major exit scam, or critical reputation sweeps).\n\n"
+        f"📋 **Current Status:** {status_text}\n\n"
+        f"Click the button below to toggle your subscription instantly."
+    )
+
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(button_text, callback_data=callback_action)]])
+    await query.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+async def _log_subscription_event(bot, user_id: int, username: str, first_name: str, subscribed: bool):
+    """Log a newsletter subscription event to LOG_CHANNEL."""
+    if not LOG_CHANNEL:
+        return
+    try:
+        from html import escape
+        from datetime import datetime, timezone
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        emoji = "🔔" if subscribed else "🔕"
+        event_name = "NEW SUBSCRIBER" if subscribed else "UNSUBSCRIBED"
+        u_fn = escape(first_name) if first_name else "Unknown"
+        u_un = f"@{escape(username)}" if username else "None"
+
+        log_html = fix_surrogates(
+            f"{emoji} <b>NEWSLETTER: {event_name}</b>\n"
+            f"──────────────────────────\n"
+            f"👤 <b>First Name:</b> {u_fn}\n"
+            f"🏷️ <b>Username:</b> {u_un}\n"
+            f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
+            f"⏱️ <b>Time:</b> <code>{now_str}</code>"
+        )
+        await bot.send_message(chat_id=LOG_CHANNEL, text=log_html, parse_mode="HTML")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to log subscription event: {e}")
