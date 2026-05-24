@@ -442,7 +442,7 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             recipient_username=safe_md(getattr(recipient_tg, "username", None) or "None"),
         ) + override_note
     )
-    await update.message.reply_text(reply_msg, parse_mode="Markdown")
+    await update.message.reply_text(reply_msg, parse_mode="Markdown", disable_web_page_preview=True)
 
     if console:
         v_uname = f"@{voucher_user.username}" if voucher_user.username else f"ID: `{voucher_user.id}`"
