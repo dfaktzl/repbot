@@ -356,9 +356,7 @@ _DEFAULT_MESSAGES = [
         "\U0001f464 **Voucher:** {voucher_name} (`{voucher_id}`)\n"
         "\U0001f3af **Recipient:** {recipient_name} (`{recipient_id}`)\n"
         "\U0001f4ac **Comment:** _{comment}_\n"
-        "\U0001f4a0 **Value:** `{value_str}` | Rep {action}\n"
-        "\U0001f4ca **New Total:** `{new_total}` vouches\n"
-        "\u23f3 **Status:** Pending manual review\n"
+        "[🚪Vouch databased/logged in here](https://t.me/VouchLoggerAU)\n"
         "\U0001f4c5 {timestamp}",
         "icon, vouch_id, voucher_name, voucher_id, recipient_name, recipient_id, comment, value_str, action, new_total, timestamp, divider",
     ),
@@ -485,6 +483,14 @@ def init_db():
         for key, value in _DEFAULT_SETTINGS:
             if not sess.query(BotSetting).filter(BotSetting.key == key).first():
                 sess.add(BotSetting(key=key, value=value))
+        
+        # Force update msg_vouch_success to the latest format to apply link update immediately
+        v_row = sess.query(BotMessage).filter(BotMessage.key == "msg_vouch_success").first()
+        if v_row:
+            for key, label, text, variables in _DEFAULT_MESSAGES:
+                if key == "msg_vouch_success":
+                    v_row.text = text
+                    break
         sess.commit()
 
 
