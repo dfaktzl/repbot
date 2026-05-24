@@ -380,10 +380,6 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if await check_blacklist(message_text, voucher_user, update.effective_chat, context, session, console):
             session.commit()
-            await update.message.reply_text(
-                fix_surrogates(get_bot_message("msg_blacklist_rejection")),
-                parse_mode="Markdown",
-            )
             return
     except Exception as mod_err:
         logger.warning(f"Moderation check error: {mod_err}")

@@ -4,6 +4,7 @@ Shared helper functions for Reputation Bot.
 
 import logging
 import re
+import asyncio
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -153,7 +154,7 @@ def ensure_user(session: Session, tg_user, *, chat_label_str: str = "", console=
 
 async def check_blacklist(text: str, user, chat, context, session: Session, console=None) -> bool:
     """Returns True if blacklisted terms found. Logs to admin channel.
-    Auto-flags user as SCAMMER after 3 violations within 24 hours.
+    Applies the progressive warnings policy: 5 warnings before kick, then 3 before a permanent ban.
     Violations are stored in the database (persistent across restarts)."""
     match = BLACKLIST_PATTERN.search(text)
     if not match:
@@ -174,15 +175,137 @@ async def check_blacklist(text: str, user, chat, context, session: Session, cons
     ))
     session.flush()
 
-    # Count recent violations within the strike window
-    cutoff = now - SCAMMER_STRIKE_WINDOW
+    # Count persistent violations (warnings persist forever in database)
     strike_count = session.query(PolicyViolation).filter(
         PolicyViolation.user_id == uid,
-        PolicyViolation.timestamp > cutoff,
     ).count()
 
-    # Auto-flagging disabled to avoid banning users for accidental violations (vouching violations now act as warnings/strikes only)
-    auto_flagged = False
+    is_group = chat and chat.type in ["group", "supergroup"]
+    display_name = f"@{user.username}" if getattr(user, "username", None) else f"{user.first_name}"
+    
+    action_text = ""
+    user_msg_text = ""
+
+    if strike_count <= 5:
+        # Case A: Pre-Kick Warning (1 to 5)
+        action_text = f"Warned (Warning {strike_count}/5)"
+        user_msg_text = (
+            f"⛔ <b>VOUCH REJECTED — POLICY VIOLATION</b>\n"
+            f"──────────────────────────\n"
+            f"Your vouch contains terms related to <b>illegal activity</b> (drugs, weapons, fraud, etc).\n\n"
+            f"This system is for <b>legitimate reputation</b> tracking only. This incident has been logged.\n\n"
+            f"⚠️ <b>Warning {strike_count}/5</b> — <i>You will be kicked from this chat on the 6th attempt.</i>"
+        )
+        if context and chat:
+            try:
+                sent = await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=user_msg_text,
+                    parse_mode="HTML"
+                )
+                # Auto-delete after 5 minutes
+                async def _delete_msg(bot, chat_id, msg_id, delay=300):
+                    await asyncio.sleep(delay)
+                    try:
+                        await bot.delete_message(chat_id, msg_id)
+                    except Exception:
+                        pass
+                asyncio.create_task(_delete_msg(context.bot, chat.id, sent.message_id))
+            except Exception as e:
+                logger.error(f"Failed to send vouch warning: {e}")
+
+    elif strike_count == 6:
+        # Case B: Kick (6th offense)
+        action_text = "Kicked from Chat (6th offense)"
+        user_msg_text = (
+            f"⛔ <b>KICKED — POLICY VIOLATION LIMIT EXCEEDED</b>\n"
+            f"──────────────────────────\n"
+            f"👤 <b>{display_name}</b> has been kicked from this chat for repeated policy violations (6th offense).\n\n"
+            f"<i>Another 3 warnings will result in a permanent ban.</i>"
+        )
+        if is_group:
+            try:
+                await context.bot.ban_chat_member(chat.id, uid)
+                await context.bot.unban_chat_member(chat.id, uid, only_if_banned=True)
+            except Exception as e:
+                logger.error(f"Failed to kick user {uid} from chat {chat.id}: {e}")
+
+        if context and chat:
+            try:
+                sent = await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=user_msg_text,
+                    parse_mode="HTML"
+                )
+                async def _delete_msg(bot, chat_id, msg_id, delay=300):
+                    await asyncio.sleep(delay)
+                    try:
+                        await bot.delete_message(chat_id, msg_id)
+                    except Exception:
+                        pass
+                asyncio.create_task(_delete_msg(context.bot, chat.id, sent.message_id))
+            except Exception as e:
+                logger.error(f"Failed to send kick notification: {e}")
+
+    elif strike_count >= 7 and strike_count <= 9:
+        # Case C: Warning before Ban (Warnings 1 to 3 after kick)
+        post_warn = strike_count - 6
+        action_text = f"Warned (Post-Kick Warning {post_warn}/3)"
+        user_msg_text = (
+            f"⛔ <b>VOUCH REJECTED — POLICY VIOLATION</b>\n"
+            f"──────────────────────────\n"
+            f"Your vouch contains terms related to <b>illegal activity</b> (drugs, weapons, fraud, etc).\n\n"
+            f"This system is for <b>legitimate reputation</b> tracking only. This incident has been logged.\n\n"
+            f"⚠️ <b>Post-Kick Warning {post_warn}/3</b> — <i>You will be permanently banned on the 4th attempt.</i>"
+        )
+        if context and chat:
+            try:
+                sent = await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=user_msg_text,
+                    parse_mode="HTML"
+                )
+                async def _delete_msg(bot, chat_id, msg_id, delay=300):
+                    await asyncio.sleep(delay)
+                    try:
+                        await bot.delete_message(chat_id, msg_id)
+                    except Exception:
+                        pass
+                asyncio.create_task(_delete_msg(context.bot, chat.id, sent.message_id))
+            except Exception as e:
+                logger.error(f"Failed to send vouch post-kick warning: {e}")
+
+    else:
+        # Case D: Permanent Ban (10th+ offense)
+        action_text = "Permanently Banned (10th offense)"
+        user_msg_text = (
+            f"🚫 <b>PERMANENTLY BANNED — REPEATED POLICY VIOLATIONS</b>\n"
+            f"──────────────────────────\n"
+            f"👤 <b>{display_name}</b> has been permanently banned from this chat.\n\n"
+            f"❌ <i>This security decision is final.</i>"
+        )
+        if is_group:
+            try:
+                await context.bot.ban_chat_member(chat.id, uid)
+            except Exception as e:
+                logger.error(f"Failed to ban user {uid} from chat {chat.id}: {e}")
+
+        if context and chat:
+            try:
+                sent = await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=user_msg_text,
+                    parse_mode="HTML"
+                )
+                async def _delete_msg(bot, chat_id, msg_id, delay=600):
+                    await asyncio.sleep(delay)
+                    try:
+                        await bot.delete_message(chat_id, msg_id)
+                    except Exception:
+                        pass
+                asyncio.create_task(_delete_msg(context.bot, chat.id, sent.message_id))
+            except Exception as e:
+                logger.error(f"Failed to send ban notification: {e}")
 
     if console:
         from rich.panel import Panel
@@ -191,12 +314,11 @@ async def check_blacklist(text: str, user, chat, context, session: Session, cons
             f"User: [bold]{user.first_name}[/bold] ({uname}, ID: {user.id})\n"
             f"Group: [magenta]{cl}[/magenta]\n"
             f"Term: [bold red]{term}[/bold red]\n"
-            f"Strike: {strike_count}/{SCAMMER_STRIKE_LIMIT}"
-            + ("\n[bold red]🚨 AUTO-FLAGGED AS SCAMMER[/bold red]" if auto_flagged else ""),
+            f"Strike/Violation: {strike_count}\n"
+            f"Action: [bold red]{action_text}[/bold red]",
             title="🚫 Policy Violation", border_style="red",
         ))
 
-    from datetime import datetime, timezone
     from html import escape
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     
@@ -215,10 +337,9 @@ async def check_blacklist(text: str, user, chat, context, session: Session, cons
         f"──────────────────────────\n"
         f"📍 <b>Group:</b> {escape(cl)}\n"
         f"🔍 <b>Term:</b> <code>{escape(term)}</code>\n"
-        f"⚠️ <b>Strike:</b> {strike_count}/{SCAMMER_STRIKE_LIMIT}"
+        f"⚠️ <b>Total Strikes:</b> {strike_count}\n"
+        f"⚖️ <b>Action:</b> <b>{action_text}</b>"
     )
-    if auto_flagged:
-        log_text += "\n──────────────────────────\n🚨 <b>AUTO-FLAGGED AS SCAMMER</b> — User must contact admin for manual verification."
 
     if LOG_CHANNEL and context:
         try:
