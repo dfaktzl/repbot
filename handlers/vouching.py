@@ -20,6 +20,7 @@ from config import (
     SENTIMENT_MIN_WORDS,
     VOUCH_TRIGGER_RE,
     ADMIN_IDS,
+    VOUCH_VAULT_CHANNEL,
 )
 from database import SessionLocal, User, Vouch, get_bot_message, get_session, get_setting
 from helpers import (
@@ -506,6 +507,16 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Failed to log vouch to channel: {e}")
 
+    if VOUCH_VAULT_CHANNEL:
+        try:
+            await context.bot.send_message(
+                chat_id=VOUCH_VAULT_CHANNEL,
+                text=log_msg,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log vouch to vouch vault: {e}")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SENTIMENT-BASED VOUCH DETECTION
@@ -680,6 +691,16 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
             )
         except Exception as e:
             logger.warning(f"Failed to log sentiment vouch: {e}")
+
+    if VOUCH_VAULT_CHANNEL:
+        try:
+            await context.bot.send_message(
+                chat_id=VOUCH_VAULT_CHANNEL,
+                text=log_msg,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log sentiment vouch to vouch vault: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

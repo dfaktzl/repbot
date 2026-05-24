@@ -14,7 +14,7 @@ from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import LOG_CHANNEL
+from config import LOG_CHANNEL, VOUCH_REVIEWS_GROUP
 from database import _DB_PATH
 from helpers import fix_surrogates, safe_md
 
@@ -335,6 +335,9 @@ async def handle_user_dm_support(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_admin_reply_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Processes replies sent by administrators in threads/DM to forward to the user's DM."""
+    if update.effective_chat.id == VOUCH_REVIEWS_GROUP:
+        return
+
     if not update.message or not update.message.reply_to_message:
         return
 
@@ -635,8 +638,15 @@ async def handle_admin_reply_support(update: Update, context: ContextTypes.DEFAU
 
 async def handle_discussion_forward_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Listens for support posts forwarded to the linked Discussion Group chat to bind thread."""
+    if update.effective_chat.id == VOUCH_REVIEWS_GROUP:
+        return
+
     message = update.message
     if not message:
+        return
+
+    # Ensure the message is forwarded from the administrative LOG_CHANNEL
+    if message.forward_from_chat and message.forward_from_chat.id != LOG_CHANNEL:
         return
 
     channel_msg_id = message.forward_from_message_id

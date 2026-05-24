@@ -24,6 +24,8 @@ if _raw:
 
 # ─── Log Channel ──────────────────────────────────────────────────────────────
 LOG_CHANNEL = int(os.getenv("LOG_CHANNEL", "-1003817851175"))
+VOUCH_VAULT_CHANNEL = int(os.getenv("VOUCH_VAULT_CHANNEL", "-1003751808316"))
+VOUCH_REVIEWS_GROUP = int(os.getenv("VOUCH_REVIEWS_GROUP", "-1003752000708"))
 
 # ─── Gatekeeper Bot Cross-Reference & Enforcement ─────────────────────────────
 GATEKEEPER_DB_PATH = os.getenv("GATEKEEPER_DB_PATH", "")
