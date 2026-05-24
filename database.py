@@ -112,6 +112,7 @@ class Vouch(Base):
     chat_id = Column(BigInteger, nullable=True)       # Group where vouch happened
     verified = Column(Integer, default=0)             # 0=Pending, 1=Approved, -1=Rejected
     is_sentiment = Column(Integer, default=0)         # 0=Regular Vouch, 1=Sentiment-based Vouch
+    vault_message_id = Column(BigInteger, nullable=True)
 
     voucher = relationship("User", foreign_keys=[voucher_id], back_populates="given_vouches")
     recipient = relationship("User", foreign_keys=[recipient_id], back_populates="received_vouches")
@@ -424,6 +425,11 @@ def init_db():
             cursor.execute("ALTER TABLE vouches ADD COLUMN is_sentiment INTEGER DEFAULT 0")
             conn.commit()
             logger.info("Migration: added 'is_sentiment' column to vouches table.")
+
+        if "vault_message_id" not in vouch_columns:
+            cursor.execute("ALTER TABLE vouches ADD COLUMN vault_message_id INTEGER DEFAULT NULL")
+            conn.commit()
+            logger.info("Migration: added 'vault_message_id' column to vouches table.")
 
         # Users table migrations
         cursor.execute("PRAGMA table_info(users)")

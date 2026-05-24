@@ -140,15 +140,16 @@ def toggle_vouch_db_sync(vouch_id: int) -> tuple[int, int, str]:
         session.close()
 
 
-def delete_vouch_db_sync(vouch_id: int) -> tuple[int, str]:
+def delete_vouch_db_sync(vouch_id: int) -> tuple[int, int | None, str]:
     """Deletes a vouch entirely and corrects recipient rep."""
     session = SessionLocal()
     try:
         vouch = session.query(Vouch).filter(Vouch.id == vouch_id).first()
         if not vouch:
-            return 0, "Vouch not found"
+            return 0, None, "Vouch not found"
         val = vouch.value
         recipient_id = vouch.recipient_id
+        vault_msg_id = vouch.vault_message_id
         
         recipient = session.query(User).filter(User.id == recipient_id).first()
         new_total = 0
@@ -159,10 +160,10 @@ def delete_vouch_db_sync(vouch_id: int) -> tuple[int, str]:
             
         session.delete(vouch)
         session.commit()
-        return new_total, ""
+        return new_total, vault_msg_id, ""
     except Exception as e:
         session.rollback()
-        return 0, str(e)
+        return 0, None, str(e)
     finally:
         session.close()
 
@@ -225,6 +226,20 @@ def approve_vouch_db_sync(vouch_id: int) -> str:
         session.rollback()
         logger.error(f"approve_vouch_db_sync error: {e}", exc_info=True)
         return str(e)
+    finally:
+        session.close()
+
+
+def update_vouch_vault_message_id_sync(vouch_id: int, vault_message_id: int):
+    session = SessionLocal()
+    try:
+        vouch = session.query(Vouch).filter(Vouch.id == vouch_id).first()
+        if vouch:
+            vouch.vault_message_id = vault_message_id
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"update_vouch_vault_message_id_sync error: {e}", exc_info=True)
     finally:
         session.close()
 
@@ -513,11 +528,12 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if VOUCH_VAULT_CHANNEL:
         try:
-            await context.bot.send_message(
+            vault_msg = await context.bot.send_message(
                 chat_id=VOUCH_VAULT_CHANNEL,
                 text=log_msg,
                 parse_mode="HTML"
             )
+            await asyncio.to_thread(update_vouch_vault_message_id_sync, vouch_id, vault_msg.message_id)
         except Exception as e:
             logger.warning(f"Failed to log vouch to vouch vault: {e}")
 
@@ -698,11 +714,12 @@ async def handle_sentiment_vouch(update: Update, context: ContextTypes.DEFAULT_T
 
     if VOUCH_VAULT_CHANNEL:
         try:
-            await context.bot.send_message(
+            vault_msg = await context.bot.send_message(
                 chat_id=VOUCH_VAULT_CHANNEL,
                 text=log_msg,
                 parse_mode="HTML"
             )
+            await asyncio.to_thread(update_vouch_vault_message_id_sync, vouch_id, vault_msg.message_id)
         except Exception as e:
             logger.warning(f"Failed to log sentiment vouch to vouch vault: {e}")
 
@@ -777,13 +794,20 @@ async def admin_log_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     elif data.startswith("admin_delete_vouch_"):
         vouch_id = int(data.split("_")[-1])
-        new_total, err = await asyncio.to_thread(delete_vouch_db_sync, vouch_id)
+        new_total, vault_msg_id, err = await asyncio.to_thread(delete_vouch_db_sync, vouch_id)
         if err:
             await query.answer(f"❌ Error: {err}", show_alert=True)
             return
         
         await query.answer(f"🗑️ Vouch #{vouch_id} deleted! Target total: {new_total}", show_alert=True)
         
+        if vault_msg_id and VOUCH_VAULT_CHANNEL:
+            try:
+                await context.bot.delete_message(chat_id=VOUCH_VAULT_CHANNEL, message_id=vault_msg_id)
+                logger.info(f"Deleted vouch #{vouch_id} message from vault: {vault_msg_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete vouch #{vouch_id} message from vault: {e}")
+
         status_note = f"🗑️ <b>Deleted by {safe_md(admin_name)}</b>"
         new_text = update_log_text(current_text, status_note)
         

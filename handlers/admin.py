@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from config import LOG_CHANNEL, PANEL_PAGE_SIZE
+from config import LOG_CHANNEL, PANEL_PAGE_SIZE, VOUCH_VAULT_CHANNEL
 from database import OldVouch, SessionLocal, User, Vouch, get_session, get_notification_subscribers, blacklist_user, get_setting
 from helpers import fix_surrogates, is_admin, safe_md
 
@@ -299,8 +299,15 @@ async def cmd_delete_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+        vault_msg_id = vouch.vault_message_id
         session.delete(vouch)
         await update.message.reply_text(f"✅ Vouch `{vouch_id}` deleted, score reverted.", parse_mode="Markdown")
+        if vault_msg_id and VOUCH_VAULT_CHANNEL:
+            try:
+                await context.bot.delete_message(chat_id=VOUCH_VAULT_CHANNEL, message_id=vault_msg_id)
+                logger.info(f"Deleted vouch #{vouch_id} message from vault: {vault_msg_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete vouch #{vouch_id} message from vault: {e}")
         if console:
             console.print(f"[warning]Admin deleted vouch #{vouch_id}[/warning]")
 
