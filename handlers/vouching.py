@@ -411,7 +411,9 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── 6. Response ──────────────────────────────────────────────────────────
     action = "increased" if value > 0 else "decreased"
     icon = "✅" if value > 0 else "❌"
-    ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    from datetime import timedelta, timezone as dt_timezone
+    gmt8 = dt_timezone(timedelta(hours=8))
+    ts_now = datetime.now(gmt8).strftime("%Y-%m-%d %H:%M GMT+8")
     comment_display = safe_md(comment_text[:120]) if comment_text else "(none)"
 
     override_note = ""
@@ -436,6 +438,8 @@ async def handle_vouch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_total=new_total,
             timestamp=ts_now,
             divider="\u2500" * 24,
+            chat_name=safe_md(update.effective_chat.title or "Private Message"),
+            recipient_username=safe_md(getattr(recipient_tg, "username", None) or "None"),
         ) + override_note
     )
     await update.message.reply_text(reply_msg, parse_mode="Markdown")

@@ -353,12 +353,14 @@ _DEFAULT_MESSAGES = [
         "{icon} **Vouch Recorded!**\n"
         "{divider}\n"
         "\U0001f194 Vouch ID: `{vouch_id}`\n"
-        "\U0001f464 **Voucher:** {voucher_name} (`{voucher_id}`)\n"
-        "\U0001f3af **Recipient:** {recipient_name} (`{recipient_id}`)\n"
+        "📍 **Location:** {chat_name}\n"
+        "\U0001f464 **Voucher:** {voucher_name} ([{voucher_id}](tg://user?id={voucher_id}))\n"
+        "\U0001f3af **Recipient:** {recipient_name} ([{recipient_id}](tg://user?id={recipient_id})) | User: @{recipient_username}\n"
         "\U0001f4ac **Comment:** _{comment}_\n"
+        "\u23f3 **Status:** Pending manual review\n"
         "[🚪Vouch databased/logged in here](https://t.me/VouchLoggerAU)\n"
         "\U0001f4c5 {timestamp}",
-        "icon, vouch_id, voucher_name, voucher_id, recipient_name, recipient_id, comment, value_str, action, new_total, timestamp, divider",
+        "icon, vouch_id, voucher_name, voucher_id, recipient_name, recipient_id, comment, value_str, action, new_total, timestamp, divider, chat_name, recipient_username",
     ),
     (
         "msg_blacklist_rejection",
