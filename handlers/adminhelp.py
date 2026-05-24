@@ -645,13 +645,28 @@ async def handle_discussion_forward_support(update: Update, context: ContextType
     if not message:
         return
 
-    # Ensure the message is forwarded from the administrative LOG_CHANNEL
-    if message.forward_from_chat and message.forward_from_chat.id != LOG_CHANNEL:
-        return
+    channel_msg_id = None
+    forward_chat_id = None
 
-    channel_msg_id = message.forward_from_message_id
-    if not channel_msg_id and message.reply_to_message:
-        channel_msg_id = message.reply_to_message.forward_from_message_id
+    # Check forward_origin on the message itself
+    if message.forward_origin:
+        from telegram import MessageOriginChannel
+        if isinstance(message.forward_origin, MessageOriginChannel):
+            channel_msg_id = message.forward_origin.message_id
+            if message.forward_origin.chat:
+                forward_chat_id = message.forward_origin.chat.id
+
+    # Check forward_origin on reply_to_message as fallback
+    if not channel_msg_id and message.reply_to_message and message.reply_to_message.forward_origin:
+        from telegram import MessageOriginChannel
+        if isinstance(message.reply_to_message.forward_origin, MessageOriginChannel):
+            channel_msg_id = message.reply_to_message.forward_origin.message_id
+            if message.reply_to_message.forward_origin.chat:
+                forward_chat_id = message.reply_to_message.forward_origin.chat.id
+
+    # Ensure the message is forwarded from the administrative LOG_CHANNEL
+    if forward_chat_id is not None and forward_chat_id != LOG_CHANNEL:
+        return
 
     if channel_msg_id:
         user_id = bind_help_ticket_to_discussion(channel_msg_id, message.chat.id, message.message_id)
